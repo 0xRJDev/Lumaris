@@ -1,0 +1,23 @@
+[package]
+name = "lumae"
+version = "0.1.0"
+edition = "2024"
+description = "Lean and fast image viewer for Linux"
+license = "GPL-2.0-or-later"
+repository = "https://github.com/0xRJDev/Lumae-Rust"
+
+[dependencies]
+winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "rwh_06"] }
+wgpu = { version = "25", default-features = false, features = ["vulkan", "gles", "wgsl"] }
+pollster = "0.4"
+bytemuck = { version = "1", features = ["derive"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "qoi", "ico", "tga", "pnm", "rayon"] }
+
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.dev.package."*"]
+opt-level = 3
