@@ -7,6 +7,7 @@ license = "GPL-2.0-or-later"
 repository = "https://github.com/0xRJDev/Lumaris"
 
 [dependencies]
+fontdue = "0.9"
 winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "rwh_06"] }
 wgpu = { version = "25", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 pollster = "0.4"

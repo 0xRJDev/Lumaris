@@ -1,10 +1,13 @@
 // Lumaris - lean and fast image viewer for Linux
 // SPDX-License-Identifier: GPL-2.0-or-later
+mod apps;
 mod blur;
 mod decode;
+mod desktop;
 mod files;
 mod gpu;
 mod kwin;
+mod menu;
 mod raw;
 mod view;
 
@@ -84,6 +87,8 @@ struct App {
     vector_request: u64,
     vector_scale: f64,
     current: Option<Arc<Decoded>>,
+    menu: Option<menu::Menu>,
+    menu_apps: Vec<apps::DesktopApp>,
 }
 
 impl App {
@@ -304,7 +309,143 @@ impl App {
         self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width as f64 / 2.0, s.height as f64 / 2.0)).unwrap_or((0.0, 0.0))
     }
 
+    fn open_menu(&mut self, at: (f64, f64)) {
+        use menu::{Action, Item};
+        let Some(window) = self.window.clone() else { return };
+        let have_image = self.current.is_some();
+        let file = self.files.current().to_path_buf();
+        self.menu_apps = if have_image { apps::for_file(&file) } else { Vec::new() };
+        let open_with = Item::sub("Open image with", self.menu_apps.iter().enumerate().map(|(i, a)| Item::new(&a.name, "", Action::OpenWith(i))).collect());
+        let current = self.slideshow.map(|d| d.as_millis() as u64).unwrap_or(0);
+        let slideshow = [(0, "Off", "Esc"), (1000, "1 second", "1"), (2000, "2 seconds", "2"), (3000, "3 seconds", "3"), (5000, "5 seconds", "5"), (10000, "10 seconds", "")]
+            .into_iter()
+            .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms))
+            .collect();
+        let zoom = vec![
+            Item::new("Fit to window", "Enter", Action::Fit),
+            Item::new("Original size (100%)", "", Action::ActualSize),
+            Item::new("Zoom in", "+", Action::ZoomIn),
+            Item::new("Zoom out", "-", Action::ZoomOut),
+        ];
+        let image_item = |i: Item| if have_image { i } else { i.disabled() };
+        let items = vec![
+            open_with,
+            image_item(Item::new("Open containing folder", "", Action::OpenFolder)),
+            Item::separator(),
+            image_item(Item::new("Copy image", "Ctrl+C", Action::CopyImage)),
+            Item::new("Copy file path", "Ctrl+Shift+C", Action::CopyPath),
+            Item::separator(),
+            Item::new("Next image", "Right", Action::Next),
+            Item::new("Previous image", "Left", Action::Previous),
+            Item::sub("Slideshow", slideshow),
+            Item::check("Loop through folder", "", Action::ToggleLoop, self.loop_folder),
+            Item::separator(),
+            Item::sub("Zoom", zoom),
+            Item::check("Full screen", "F11", Action::Fullscreen, window.fullscreen().is_some()),
+            Item::separator(),
+            Item::new("Exit", "Esc", Action::Quit),
+        ];
+        let s = window.inner_size();
+        self.menu = Some(menu::Menu::open(items, at, (s.width, s.height), window.scale_factor()));
+        self.sync_menu();
+    }
+
+    fn close_menu(&mut self) {
+        if self.menu.take().is_some() {
+            self.sync_menu();
+        }
+    }
+
+    /// Shows the current menu state (or no menu)
+    fn sync_menu(&mut self) {
+        if let Some(r) = self.renderer.as_mut() {
+            match self.menu.as_mut() {
+                Some(m) => r.set_overlays(&m.layers()),
+                None => r.set_overlays(&[]),
+            }
+        }
+        self.redraw();
+    }
+
+    fn run(&mut self, event_loop: &ActiveEventLoop, action: menu::Action) {
+        use menu::Action;
+        self.close_menu();
+        let file = self.files.current().to_path_buf();
+        match action {
+            Action::OpenWith(i) => {
+                if let Some(app) = self.menu_apps.get(i) {
+                    apps::launch(app, &file);
+                }
+            }
+            Action::OpenFolder => desktop::show_in_folder(file),
+            Action::CopyImage => {
+                if let Some(img) = self.current.clone() {
+                    desktop::copy_image(img);
+                }
+            }
+            Action::CopyPath => desktop::copy_text(file.to_string_lossy().into_owned()),
+            Action::Next => self.step(event_loop, 1),
+            Action::Previous => self.step(event_loop, -1),
+            Action::Slideshow(0) => self.stop_slideshow(),
+            Action::Slideshow(ms) => self.start_slideshow(Duration::from_millis(ms)),
+            Action::ToggleLoop => self.loop_folder = !self.loop_folder,
+            Action::Fit => self.fit(event_loop),
+            Action::ActualSize => {
+                self.view.zoom_to(1.0);
+                self.redraw();
+            }
+            Action::ZoomIn | Action::ZoomOut => {
+                let c = self.window_center();
+                self.view.zoom_at(if action == Action::ZoomIn { WHEEL_STEP } else { 1.0 / WHEEL_STEP }, c);
+                self.redraw();
+            }
+            Action::Fullscreen => self.toggle_fullscreen(),
+            Action::Quit => event_loop.exit(),
+        }
+    }
+
+    fn menu_click(&mut self, event_loop: &ActiveEventLoop, at: (f64, f64), right: bool) {
+        let Some(m) = self.menu.as_mut() else { return };
+        match m.click(at) {
+            menu::Click::Run(a) => self.run(event_loop, a),
+            menu::Click::Close => {
+                self.close_menu();
+                if right {
+                    self.open_menu(at);
+                }
+            }
+            menu::Click::Nothing => {}
+        }
+    }
+
     fn key(&mut self, event_loop: &ActiveEventLoop, key: Key, code: Option<KeyCode>) {
+        if let Some(m) = self.menu.as_mut() {
+            let name = match key.as_ref() {
+                Key::Named(NamedKey::ArrowUp) => "Up",
+                Key::Named(NamedKey::ArrowDown) => "Down",
+                Key::Named(NamedKey::ArrowLeft) => "Left",
+                Key::Named(NamedKey::ArrowRight) => "Right",
+                Key::Named(NamedKey::Enter | NamedKey::Space) => "Enter",
+                _ => {
+                    self.close_menu(); // Esc and any other key
+                    return;
+                }
+            };
+            let v = m.version;
+            match m.key(name) {
+                menu::Click::Run(a) => self.run(event_loop, a),
+                _ if m.version != v => self.sync_menu(),
+                _ => {}
+            }
+            return;
+        }
+        if let (Key::Character(c), true) = (key.as_ref(), self.mods.control_key()) {
+            if c.eq_ignore_ascii_case("c") {
+                let action = if self.mods.shift_key() { menu::Action::CopyPath } else { menu::Action::CopyImage };
+                self.run(event_loop, action);
+                return;
+            }
+        }
         // 1..9: slideshow with 1..9 seconds per image (Ctrl: tenths, Ctrl+Shift: hundredths)
         let digit = match code {
             Some(KeyCode::Digit1 | KeyCode::Numpad1) => 1,
@@ -391,10 +532,32 @@ impl App {
                 };
                 self.key(event_loop, key, code);
             }
+            ["rclick", x, y] | ["lclick", x, y] | ["move", x, y] => {
+                let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) else { return };
+                self.window_event(event_loop, self.window.as_ref().unwrap().id(), WindowEvent::CursorMoved {
+                    device_id: winit::event::DeviceId::dummy(),
+                    position: PhysicalPosition::new(x, y),
+                });
+                if a[0] != "move" {
+                    let button = if a[0] == "rclick" { MouseButton::Right } else { MouseButton::Left };
+                    for state in [ElementState::Pressed, ElementState::Released] {
+                        self.window_event(event_loop, self.window.as_ref().unwrap().id(), WindowEvent::MouseInput {
+                            device_id: winit::event::DeviceId::dummy(),
+                            state,
+                            button,
+                        });
+                    }
+                }
+            }
+            ["apps"] => {
+                for a in apps::for_file(self.files.current()) {
+                    println!("APP {} ({})", a.name, a.id);
+                }
+            }
             ["info"] => {
                 let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
                 let r = self.view.image_rect();
-                println!("INFO index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
+                println!("INFO menu={} index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.menu.is_some(), self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
             }
             ["quit"] => event_loop.exit(),
             _ => eprintln!("lumaris: unknown test command: {cmd}"),
@@ -529,6 +692,7 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(s) => {
+                self.close_menu();
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(s.width, s.height);
                 }
@@ -543,6 +707,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if !self.first_frame_done {
                     self.first_frame_done = true;
+                    // after the first frame: prepare the menu (applications, font) in the background
+                    apps::warm_up();
+                    menu::warm_up();
                     if self.timing {
                         eprintln!("lumaris: first frame after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
                     }
@@ -554,6 +721,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::CursorMoved { position: PhysicalPosition { x, y }, .. } => {
+                if let Some(m) = self.menu.as_mut() {
+                    self.cursor = (x, y);
+                    if m.hover((x, y)) {
+                        self.sync_menu();
+                    }
+                    return;
+                }
                 if let Some((lx, ly)) = self.drag {
                     self.view.pan(x - lx, y - ly);
                     self.drag = Some((x, y));
@@ -561,7 +735,16 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.cursor = (x, y);
             }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: b @ (MouseButton::Left | MouseButton::Right), .. }
+                if self.menu.is_some() =>
+            {
+                self.menu_click(event_loop, self.cursor, b == MouseButton::Right);
+            }
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
+                (MouseButton::Right, ElementState::Pressed) => {
+                    self.drag = None;
+                    self.open_menu(self.cursor);
+                }
                 (MouseButton::Left, ElementState::Pressed) => self.drag = Some(self.cursor),
                 (MouseButton::Left, ElementState::Released) => self.drag = None,
                 (MouseButton::Back, ElementState::Pressed) => self.step(event_loop, -1),
@@ -569,6 +752,7 @@ impl ApplicationHandler<UserEvent> for App {
                 _ => {}
             },
             WindowEvent::MouseWheel { delta, .. } => {
+                self.close_menu();
                 let steps = match delta {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
                     MouseScrollDelta::PixelDelta(p) => p.y / 60.0,
@@ -678,6 +862,8 @@ fn main() {
         vector_request: 0,
         vector_scale: 1.0,
         current: None,
+        menu: None,
+        menu_apps: Vec::new(),
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("lumaris: {e}");

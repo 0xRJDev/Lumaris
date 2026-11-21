@@ -80,6 +80,10 @@ fn sample(uv: vec2<f32>) -> vec4<f32> {
 // output with premultiplied alpha (the window itself may be see-through)
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    if u.mode == 4u {
+        // overlay (menu): exact pixels, already premultiplied
+        return textureSampleLevel(tex, s_near, in.uv, 0.0);
+    }
     let c = sample(in.uv);
     return vec4(c.rgb * c.a, c.a);
 }

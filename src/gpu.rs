@@ -65,6 +65,14 @@ struct Uniforms {
     pad: f32,
 }
 
+/// An image drawn over the main image at a fixed position (menus)
+struct Overlay {
+    bind_group: wgpu::BindGroup,
+    uniforms: wgpu::Buffer,
+    rect: [f32; 4],
+    size: (u32, u32),
+}
+
 struct ImageTexture {
     bind_group: wgpu::BindGroup,
     texture: wgpu::Texture,
@@ -91,6 +99,7 @@ pub struct Renderer {
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     image: Option<ImageTexture>,
+    overlays: Vec<Overlay>,
     background: wgpu::Color,
     transparent: bool,
 }
@@ -198,6 +207,7 @@ impl Renderer {
             linear,
             nearest,
             image: None,
+            overlays: Vec::new(),
             background: wgpu::Color::BLACK,
             transparent,
         })
@@ -338,6 +348,51 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
     }
 
+    /// Images drawn on top: premultiplied RGBA (pixels, width, height, x, y). Empty: none.
+    pub fn set_overlays(&mut self, layers: &[(&[u8], u32, u32, i32, i32)]) {
+        let device = &self.gpu.device;
+        self.overlays = layers
+            .iter()
+            .map(|&(pixels, w, h, x, y)| {
+                let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+                let texture = device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("overlay"),
+                    size,
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                    view_formats: &[],
+                });
+                self.gpu.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    pixels,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+                    size,
+                );
+                let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("overlay uniforms"),
+                    size: std::mem::size_of::<Uniforms>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                let view = texture.create_view(&Default::default());
+                let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("overlay"),
+                    layout: &self.layout,
+                    entries: &[
+                        wgpu::BindGroupEntry { binding: 0, resource: uniforms.as_entire_binding() },
+                        wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                        wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.linear) },
+                        wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
+                    ],
+                });
+                Overlay { bind_group, uniforms, rect: [x as f32, y as f32, (x + w as i32) as f32, (y + h as i32) as f32], size: (w, h) }
+            })
+            .collect();
+    }
+
     pub fn clear_image(&mut self) {
         self.image = None;
     }
@@ -389,6 +444,21 @@ impl Renderer {
                 self.gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &img.bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
+            for o in &self.overlays {
+                let u = Uniforms {
+                    rect: o.rect,
+                    viewport: [self.config.width as f32, self.config.height as f32],
+                    tex_size: [o.size.0 as f32, o.size.1 as f32],
+                    zoom: 1.0,
+                    mode: 4,
+                    lod: 0.0,
+                    pad: 0.0,
+                };
+                self.gpu.queue.write_buffer(&o.uniforms, 0, bytemuck::bytes_of(&u));
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &o.bind_group, &[]);
                 pass.draw(0..6, 0..1);
             }
         }

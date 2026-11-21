@@ -11,7 +11,11 @@ A lean and fast image viewer for Linux, written in Rust.
 - Smooth zoom around the mouse pointer, panning by dragging
 - Filters: bicubic when enlarging, mipmaps when reducing, sharp square pixels for pixel art
   (images up to 256 px), exact pixels at 100%
-- Next / previous image of the folder in natural order; neighbours are decoded in advance
+- Next / previous image of the folder in natural order (looping); neighbours are decoded in advance
+- Slideshow (keys 1 to 9: seconds per image)
+- Right-click menu in the desktop's style (KDE font and colours): open with the applications
+  associated with the file type (default first), open the containing folder, copy the image or
+  its path, navigation, slideshow, zoom, full screen
 - Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
   (embedded preview, LibRaw), BMP, TIFF, QOI, ICO, TGA, PNM; animated GIF, WebP and PNG
 
@@ -21,6 +25,23 @@ A lean and fast image viewer for Linux, written in Rust.
 cargo build --release
 target/release/lumaris <image or folder>
 ```
+
+## Keys
+
+| Key | Action |
+|---|---|
+| Right, Page Down / Left, Page Up, Backspace | Next / previous image (loops through the folder) |
+| Home / End | First / last image |
+| Mouse wheel, + / - | Zoom around the pointer |
+| Space / Enter | Fit to window or 100% / fit to window |
+| 1 to 9 | Slideshow, 1 to 9 seconds per image (Ctrl: tenths of a second) |
+| Ctrl+C / Ctrl+Shift+C | Copy the image / its file path |
+| F11 | Full screen |
+| Esc | Stop the slideshow, leave full screen, quit |
+| Right click | Menu |
+| Mouse back / forward | Previous / next image |
+
+Copying needs `wl-clipboard` (Wayland) or `xclip` (X11).
 
 ## License
 
