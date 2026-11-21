@@ -68,6 +68,10 @@ struct Uniforms {
     lod: f32,
     /// checkerboard square size behind transparent parts (0 = none)
     checker: f32,
+    /// rotation (bits 0-1, 90° steps clockwise) and horizontal flip (bit 2)
+    orient: u32,
+    alpha: f32,
+    pad: [f32; 2],
 }
 
 /// An image drawn over the main image at a fixed position (menus)
@@ -417,7 +421,7 @@ impl Renderer {
     }
 
     /// Draws one frame. `rect`: image rectangle in window pixels, `zoom`: display zoom.
-    pub fn render(&mut self, rect: [f32; 4], zoom: f64) {
+    pub fn render(&mut self, rect: [f32; 4], zoom: f64, orient: u32) {
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -459,6 +463,9 @@ impl Renderer {
                     mode,
                     lod,
                     checker: if self.checkerboard { (8.0 * self.window.scale_factor()).round() as f32 } else { 0.0 },
+                    orient,
+                    alpha: 1.0,
+                    pad: [0.0; 2],
                 };
                 self.gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);
@@ -474,6 +481,9 @@ impl Renderer {
                     mode: 4,
                     lod: 0.0,
                     checker: 0.0,
+                    orient: 0,
+                    alpha: 1.0,
+                    pad: [0.0; 2],
                 };
                 self.gpu.queue.write_buffer(&o.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);

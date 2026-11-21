@@ -2,16 +2,22 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 mod apps;
 mod blur;
+mod commands;
 mod decode;
 mod desktop;
+mod dnd;
 mod files;
 mod gpu;
 mod info;
+mod instance;
+mod keys;
 mod kwin;
 mod menu;
+mod portal;
 mod raw;
 mod settings;
 mod settings_ui;
+mod trash;
 mod ui;
 mod view;
 
@@ -47,6 +53,8 @@ pub enum UserEvent {
     Test(String),
     /// A vector image re-rendered for the current zoom (path, request number)
     VectorRendered(PathBuf, u64, Result<Arc<Decoded>, String>),
+    /// open this file (dialog, drag and drop, another `lumaris` in single instance mode)
+    Open(PathBuf),
 }
 
 /// The animation being played: image, current frame, when the next frame is due
@@ -94,6 +102,13 @@ struct App {
     size_before_settings: Option<PhysicalSize<u32>>,
     info: Option<info::InfoBox>,
     info_zoom: f64,
+    help: Option<info::InfoBox>,
+    /// view orientation: bits 0-1 rotation (90° steps clockwise), bit 2 flipped horizontally
+    orient: u32,
+    last_click: Option<(Instant, (f64, f64))>,
+    user_commands: Vec<commands::UserCommand>,
+    navigation_panel: bool,
+    _instance: Option<instance::Instance>,
 }
 
 impl App {
@@ -190,6 +205,7 @@ impl App {
         window.set_title(&Self::title_for(&path, ""));
         let keep = settings::current().bool("KeepZoom") && self.shown.is_some() && !self.view.is_fit();
         self.shown = Some(path);
+        self.orient = 0;
         if keep {
             self.view.replace_image(img.width, img.height);
             self.redraw();
@@ -204,6 +220,212 @@ impl App {
         self.vector_scale = img.pixel_width as f64 / img.width as f64;
         self.current = Some(img);
         self.refresh_info();
+    }
+
+    /// Rotates or flips the view of the current image. `op` maps a point of the new view to the
+    /// point of the old view (unit square).
+    fn orient(&mut self, event_loop: &ActiveEventLoop, op: fn((f32, f32)) -> (f32, f32)) {
+        // texture position shown at display position p for an orientation (as in the shader)
+        let uv = |o: u32, p: (f32, f32)| {
+            let d = if o & 4 != 0 { (1.0 - p.0, p.1) } else { p };
+            match o & 3 {
+                1 => (d.1, 1.0 - d.0),
+                2 => (1.0 - d.0, 1.0 - d.1),
+                3 => (1.0 - d.1, d.0),
+                _ => d,
+            }
+        };
+        let corners = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)];
+        let old = self.orient;
+        if let Some(new) = (0..8).find(|&o| corners.iter().all(|&p| uv(o, p) == uv(old, op(p)))) {
+            self.orient = new;
+        }
+        let rot = self.orient & 3;
+        if let Some(img) = self.current.clone() {
+            let (w, h) = if rot % 2 == 1 { (img.height, img.width) } else { (img.width, img.height) };
+            self.view.set_image(w, h);
+            self.fit(event_loop);
+        }
+    }
+
+    fn move_to_trash(&mut self, event_loop: &ActiveEventLoop) {
+        if self.current.is_none() {
+            return;
+        }
+        let path = self.files.current().to_path_buf();
+        match trash::trash(&path) {
+            Ok(()) => {
+                self.cache.retain(|(p, _)| *p != path);
+                let i = self.files.index;
+                self.files.files.remove(i);
+                if self.files.files.is_empty() {
+                    event_loop.exit();
+                    return;
+                }
+                self.files.index = i.min(self.files.files.len() - 1);
+                self.shown = None;
+                let k = self.files.index;
+                self.files.index = usize::MAX; // force go_to to show it
+                self.go_to_forced(event_loop, k);
+            }
+            Err(e) => {
+                eprintln!("lumaris: cannot move {} to the trash: {e}", path.display());
+                if let Some(w) = &self.window {
+                    w.set_title(&Self::title_for(&path, &format!(" (not moved to the trash: {e})")));
+                }
+            }
+        }
+    }
+
+    fn go_to_forced(&mut self, event_loop: &ActiveEventLoop, index: usize) {
+        self.files.index = index;
+        let path = self.files.current().to_path_buf();
+        if let Some((_, img)) = self.cache.iter().find(|(p, _)| *p == path) {
+            let img = img.clone();
+            self.show(event_loop, path, img);
+        } else {
+            self.request(path);
+        }
+        self.prefetch();
+    }
+
+    /// Opens another image (and its folder)
+    fn open_path(&mut self, event_loop: &ActiveEventLoop, path: &Path) {
+        let Some(files) = files::FileList::new(path) else {
+            eprintln!("lumaris: no images found: {}", path.display());
+            return;
+        };
+        self.files = files;
+        let s = settings::current().clone();
+        if s.choice("SortOrder") != 0 || s.bool("SortReverse") {
+            self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
+        }
+        self.cache.clear();
+        self.shown = None;
+        self.stop_slideshow();
+        let k = self.files.index;
+        self.go_to_forced(event_loop, k);
+    }
+
+    /// The open dialog (in the background); the chosen file arrives as UserEvent::Open
+    fn open_dialog(&mut self) {
+        let folder = self.files.files.get(self.files.index).and_then(|p| p.parent()).map(Path::to_path_buf);
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            if let Some(p) = portal::pick_image(folder.as_deref()) {
+                let _ = proxy.send_event(UserEvent::Open(p));
+            }
+        });
+    }
+
+    fn toggle_navigation_panel(&mut self) {
+        self.navigation_panel = !self.navigation_panel;
+        self.sync_overlays();
+    }
+
+    fn user_command_for(&self, key: &Key) -> Option<usize> {
+        self.user_commands.iter().position(|c| !c.key.is_empty() && keys::KeyMap::matches(&c.key, key, self.mods))
+    }
+
+    fn run_user_command(&mut self, i: usize) {
+        if self.current.is_some() {
+            if let Some(c) = self.user_commands.get(i) {
+                c.run(self.files.current());
+            }
+        }
+    }
+
+    fn toggle_help(&mut self) {
+        if self.help.take().is_some() {
+            self.sync_overlays();
+            return;
+        }
+        let km = keys::current();
+        let mut lines: Vec<(String, String)> = keys::COMMANDS
+            .iter()
+            .map(|(cmd, _, desc, _)| (km.shortcuts(*cmd), desc.to_string()))
+            .filter(|(k, _)| !k.is_empty())
+            .collect();
+        for (k, d) in [
+            ("1 … 9", "Slideshow, seconds per image (Ctrl: tenths)"),
+            ("Mouse wheel", "Zoom (Ctrl: next / previous image)"),
+            ("Drag", "Move the image"),
+            ("Double click", "Full screen"),
+            ("Right click", "Menu"),
+            ("Mouse back / forward", "Previous / next image"),
+        ] {
+            lines.push((k.into(), d.into()));
+        }
+        drop(km);
+        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+        self.help = Some(info::InfoBox::with_lines(lines, scale));
+        self.sync_overlays();
+    }
+
+    fn pan_step(&mut self, dx: f64, dy: f64) {
+        let c = self.window_center();
+        self.view.pan(dx * c.0 * 0.3, dy * c.1 * 0.3);
+        self.redraw();
+    }
+
+    fn command(&mut self, event_loop: &ActiveEventLoop, cmd: keys::Command) {
+        use keys::Command::*;
+        match cmd {
+            Next => self.step(event_loop, 1),
+            Previous => self.step(event_loop, -1),
+            First => self.go_to(event_loop, 0),
+            Last => self.go_to(event_loop, self.files.files.len() - 1),
+            ZoomIn | ZoomOut => {
+                let c = self.window_center();
+                self.view.zoom_at(if cmd == ZoomIn { wheel_step() } else { 1.0 / wheel_step() }, c);
+                self.redraw();
+            }
+            ToggleFit => {
+                if self.view.is_fit() && (self.view.zoom - 1.0).abs() > 1e-9 {
+                    self.view.zoom_to(1.0);
+                    self.redraw();
+                } else {
+                    self.fit(event_loop);
+                }
+            }
+            Fit => self.fit(event_loop),
+            ActualSize => {
+                self.view.zoom_to(1.0);
+                self.redraw();
+            }
+            PanLeft => self.pan_step(1.0, 0.0),
+            PanRight => self.pan_step(-1.0, 0.0),
+            PanUp => self.pan_step(0.0, 1.0),
+            PanDown => self.pan_step(0.0, -1.0),
+            RotateRight => self.orient(event_loop, |p| (p.1, 1.0 - p.0)),
+            RotateLeft => self.orient(event_loop, |p| (1.0 - p.1, p.0)),
+            FlipHorizontal => self.orient(event_loop, |p| (1.0 - p.0, p.1)),
+            FlipVertical => self.orient(event_loop, |p| (p.0, 1.0 - p.1)),
+            FullScreen => self.toggle_fullscreen(),
+            CopyImage => self.run(event_loop, menu::Action::CopyImage),
+            CopyPath => self.run(event_loop, menu::Action::CopyPath),
+            ImageInfo => self.toggle_info(),
+            NavigationPanel => self.toggle_navigation_panel(),
+            Settings => self.open_settings(),
+            Help => self.toggle_help(),
+            Open => self.open_dialog(),
+            OpenFolder => self.run(event_loop, menu::Action::OpenFolder),
+            Trash => self.move_to_trash(event_loop),
+            Close => {
+                if self.help.is_some() {
+                    self.toggle_help();
+                } else if self.info.is_some() {
+                    self.toggle_info();
+                } else if self.slideshow.is_some() {
+                    self.stop_slideshow();
+                } else if self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()) {
+                    self.toggle_fullscreen();
+                } else {
+                    event_loop.exit();
+                }
+            }
+            Quit => event_loop.exit(),
+        }
     }
 
     fn toggle_info(&mut self) {
@@ -269,11 +491,18 @@ impl App {
                 self.sync_overlays();
             }
             settings_ui::Outcome::Close => self.close_settings(),
-            settings_ui::Outcome::EditFile => {
-                let path = settings::Settings::path();
-                if !path.exists() {
-                    let _ = settings::current().save();
-                }
+            settings_ui::Outcome::EditFile(which) => {
+                let path = match which {
+                    1 => keys::KeyMap::write_file_if_missing(),
+                    2 => commands::write_file_if_missing(),
+                    _ => {
+                        let path = settings::Settings::path();
+                        if !path.exists() {
+                            let _ = settings::current().save();
+                        }
+                        path
+                    }
+                };
                 apps::spawn_detached(std::process::Command::new("xdg-open").arg(path));
                 self.close_settings();
             }
@@ -474,33 +703,56 @@ impl App {
         slideshow.extend([(0, "Off", "Esc"), (1000, "1 second", "1"), (2000, "2 seconds", "2"), (3000, "3 seconds", "3"), (5000, "5 seconds", "5"), (10000, "10 seconds", "")]
             .into_iter()
             .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms)));
+        let km = keys::current();
         let zoom = vec![
-            Item::new("Fit to window", "Enter", Action::Fit),
-            Item::new("Original size (100%)", "", Action::ActualSize),
-            Item::new("Zoom in", "+", Action::ZoomIn),
-            Item::new("Zoom out", "-", Action::ZoomOut),
+            Item::new("Fit to window", &km.shortcut(keys::Command::Fit), Action::Fit),
+            Item::new("Original size (100%)", &km.shortcut(keys::Command::ActualSize), Action::ActualSize),
+            Item::new("Zoom in", &km.shortcut(keys::Command::ZoomIn), Action::ZoomIn),
+            Item::new("Zoom out", &km.shortcut(keys::Command::ZoomOut), Action::ZoomOut),
         ];
         let image_item = |i: Item| if have_image { i } else { i.disabled() };
+        let rotate = vec![
+            image_item(Item::new("Rotate right", &km.shortcut(keys::Command::RotateRight), Action::RotateRight)),
+            image_item(Item::new("Rotate left", &km.shortcut(keys::Command::RotateLeft), Action::RotateLeft)),
+            image_item(Item::new("Flip horizontally", &km.shortcut(keys::Command::FlipHorizontal), Action::FlipHorizontal)),
+            image_item(Item::new("Flip vertically", &km.shortcut(keys::Command::FlipVertical), Action::FlipVertical)),
+        ];
+        let user: Vec<Item> = self
+            .user_commands
+            .iter()
+            .enumerate()
+            .map(|(i, c)| image_item(Item::new(&c.name, &keys::KeyMap::display(&c.key), Action::UserCommand(i))))
+            .collect();
         let items = vec![
             open_with,
-            image_item(Item::new("Open containing folder", "", Action::OpenFolder)),
+            image_item(Item::new("Open containing folder", &km.shortcut(keys::Command::OpenFolder), Action::OpenFolder)),
+            Item::new("Open image…", &km.shortcut(keys::Command::Open), Action::Open),
             Item::separator(),
-            image_item(Item::new("Copy image", "Ctrl+C", Action::CopyImage)),
-            Item::new("Copy file path", "Ctrl+Shift+C", Action::CopyPath),
+            image_item(Item::new("Copy image", &km.shortcut(keys::Command::CopyImage), Action::CopyImage)),
+            Item::new("Copy file path", &km.shortcut(keys::Command::CopyPath), Action::CopyPath),
+            image_item(Item::new("Move to trash", &km.shortcut(keys::Command::Trash), Action::Trash)),
             Item::separator(),
-            Item::new("Next image", "Right", Action::Next),
-            Item::new("Previous image", "Left", Action::Previous),
+            Item::new("Next image", &km.shortcut(keys::Command::Next), Action::Next),
+            Item::new("Previous image", &km.shortcut(keys::Command::Previous), Action::Previous),
             Item::sub("Slideshow", slideshow),
             Item::check("Loop through folder", "", Action::ToggleLoop, self.loop_folder),
             Item::separator(),
             Item::sub("Zoom", zoom),
-            Item::check("Full screen", "F11", Action::Fullscreen, window.fullscreen().is_some()),
+            Item::sub("Rotate", rotate),
+            Item::check("Full screen", &km.shortcut(keys::Command::FullScreen), Action::Fullscreen, window.fullscreen().is_some()),
             Item::separator(),
-            Item::check("Image info", "I", Action::ImageInfo, self.info.is_some()),
-            Item::new("Settings…", "Ctrl+,", Action::Settings),
+            Item::check("Image info", &km.shortcut(keys::Command::ImageInfo), Action::ImageInfo, self.info.is_some()),
+            Item::check("Navigation panel", &km.shortcut(keys::Command::NavigationPanel), Action::NavigationPanel, self.navigation_panel),
+            Item::new("Keys…", &km.shortcut(keys::Command::Help), Action::Help),
+            Item::new("Settings…", &km.shortcut(keys::Command::Settings), Action::Settings),
             Item::separator(),
-            Item::new("Exit", "Esc", Action::Quit),
+            Item::new("Exit", &km.shortcut(keys::Command::Quit), Action::Quit),
         ];
+        let mut items = items;
+        if !user.is_empty() {
+            items.insert(3, Item::sub("Commands", user)); // after the open entries
+        }
+        drop(km);
         let s = window.inner_size();
         self.menu = Some(menu::Menu::open(items, at, (s.width, s.height), window.scale_factor()));
         self.sync_overlays();
@@ -514,11 +766,15 @@ impl App {
 
     /// Shows the current panels: image info, settings window, menu (on top)
     fn sync_overlays(&mut self) {
-        let App { renderer, menu, settings_panel, info, .. } = self;
+        let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
+        let App { renderer, menu, settings_panel, info, help, .. } = self;
         if let Some(r) = renderer.as_mut() {
             let mut layers = Vec::new();
             if let Some(i) = info.as_mut() {
-                layers.extend(i.layer());
+                layers.extend(i.layer(size));
+            }
+            if let Some(h) = help.as_mut() {
+                layers.extend(h.layer(size));
             }
             if let Some(p) = settings_panel.as_mut() {
                 layers.extend(p.layers());
@@ -576,6 +832,19 @@ impl App {
                 self.start_slideshow(Duration::from_secs_f64(s));
             }
             Action::Choice(_) => {}
+            Action::Open => self.open_dialog(),
+            Action::Trash => self.move_to_trash(event_loop),
+            Action::RotateRight => self.command(event_loop, keys::Command::RotateRight),
+            Action::RotateLeft => self.command(event_loop, keys::Command::RotateLeft),
+            Action::FlipHorizontal => self.command(event_loop, keys::Command::FlipHorizontal),
+            Action::FlipVertical => self.command(event_loop, keys::Command::FlipVertical),
+            Action::NavigationPanel => self.toggle_navigation_panel(),
+            Action::Help => self.toggle_help(),
+            Action::UserCommand(i) => {
+                if let Some(c) = self.user_commands.get(i) {
+                    c.run(&file);
+                }
+            }
             Action::Quit => event_loop.exit(),
         }
     }
@@ -625,20 +894,10 @@ impl App {
             }
             return;
         }
-        if let (Key::Character(","), true) = (key.as_ref(), self.mods.control_key()) {
-            self.open_settings();
+        if self.help.is_some() && key != Key::Named(NamedKey::F1) {
+            // any key closes the help
+            self.toggle_help();
             return;
-        }
-        if let (Key::Character("i" | "I"), false) = (key.as_ref(), self.mods.control_key()) {
-            self.toggle_info();
-            return;
-        }
-        if let (Key::Character(c), true) = (key.as_ref(), self.mods.control_key()) {
-            if c.eq_ignore_ascii_case("c") {
-                let action = if self.mods.shift_key() { menu::Action::CopyPath } else { menu::Action::CopyImage };
-                self.run(event_loop, action);
-                return;
-            }
         }
         // 1..9: slideshow with 1..9 seconds per image (Ctrl: tenths, Ctrl+Shift: hundredths)
         let digit = match code {
@@ -654,55 +913,19 @@ impl App {
             _ => 0,
         };
         let (ctrl, shift) = (self.mods.control_key(), self.mods.shift_key());
-        if digit > 0 && (!shift || ctrl) {
+        if digit > 0 && (!shift || ctrl) && !self.mods.alt_key() {
             let ms = digit * if ctrl && shift { 10 } else if ctrl { 100 } else { 1000 };
             self.start_slideshow(Duration::from_millis(ms));
             return;
         }
-        match key.as_ref() {
-            Key::Named(NamedKey::ArrowRight | NamedKey::PageDown) => self.step(event_loop, 1),
-            Key::Named(NamedKey::ArrowLeft | NamedKey::PageUp | NamedKey::Backspace) => self.step(event_loop, -1),
-            Key::Named(NamedKey::Home) => self.go_to(event_loop, 0),
-            Key::Named(NamedKey::End) => self.go_to(event_loop, self.files.files.len() - 1),
-            Key::Named(NamedKey::F11) => self.toggle_fullscreen(),
-            Key::Named(NamedKey::Escape) => {
-                if self.info.is_some() {
-                    self.toggle_info();
-                } else if self.slideshow.is_some() {
-                    self.stop_slideshow();
-                } else if self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()) {
-                    self.toggle_fullscreen();
-                } else {
-                    event_loop.exit();
-                }
-            }
-            Key::Character("+" | "=") => {
-                let c = self.window_center();
-                self.view.zoom_at(wheel_step(), c);
-                self.redraw();
-            }
-            Key::Character("-") => {
-                let c = self.window_center();
-                self.view.zoom_at(1.0 / wheel_step(), c);
-                self.redraw();
-            }
-            // Space: fit <-> 100%, Enter: fit
-            Key::Named(NamedKey::Space) => {
-                if self.view.is_fit() && (self.view.zoom - 1.0).abs() > 1e-9 {
-                    self.view.zoom_to(1.0);
-                    self.redraw();
-                } else {
-                    self.fit(event_loop);
-                }
-            }
-            Key::Named(NamedKey::Enter) => self.fit(event_loop),
-            _ => {}
+        let cmd = keys::current().lookup(&key, self.mods);
+        if let Some(cmd) = cmd {
+            self.command(event_loop, cmd);
+        } else if let Some(c) = self.user_command_for(&key) {
+            self.run_user_command(c);
         }
     }
-}
 
-impl App {
-    /// wheel <steps> <x> <y> | key <name> | info | quit
     fn test_command(&mut self, event_loop: &ActiveEventLoop, cmd: &str) {
         let a: Vec<&str> = cmd.split_whitespace().collect();
         match a.as_slice() {
@@ -719,6 +942,8 @@ impl App {
                     "F11" => Key::Named(NamedKey::F11),
                     "Escape" => Key::Named(NamedKey::Escape),
                     "Space" => Key::Named(NamedKey::Space),
+                    "Delete" => Key::Named(NamedKey::Delete),
+                    "F1" => Key::Named(NamedKey::F1),
                     c => Key::Character(c.into()),
                 };
                 let code = match *name {
@@ -754,7 +979,7 @@ impl App {
             ["info"] => {
                 let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
                 let r = self.view.image_rect();
-                println!("INFO menu={} index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.menu.is_some(), self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
+                println!("INFO orient={} files={} menu={} index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.orient, self.files.files.len(), self.menu.is_some(), self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
             }
             ["quit"] => event_loop.exit(),
             _ => eprintln!("lumaris: unknown test command: {cmd}"),
@@ -834,6 +1059,9 @@ impl ApplicationHandler<UserEvent> for App {
         self.window = Some(window);
         self.renderer = Some(renderer);
         self.apply_settings(None);
+        if let Some(w) = self.window.clone() {
+            dnd::start(&w, self.proxy.clone());
+        }
         match first {
             Ok(img) => {
                 self.cache.push((path.clone(), img.clone()));
@@ -849,6 +1077,13 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Decoded(path, result) => (path, result),
             UserEvent::Quit => return event_loop.exit(),
             UserEvent::Test(cmd) => return self.test_command(event_loop, &cmd),
+            UserEvent::Open(path) => {
+                self.open_path(event_loop, &path);
+                if let Some(k) = &self.kwin {
+                    k.activate();
+                }
+                return;
+            }
             UserEvent::VectorRendered(path, id, result) => {
                 if let (Ok(img), true) = (result, id == self.vector_request && self.files.current() == path) {
                     if let Some(r) = self.renderer.as_mut() {
@@ -907,7 +1142,7 @@ impl ApplicationHandler<UserEvent> for App {
                 let animating = self.view.step(Instant::now());
                 self.follow_zoom(event_loop);
                 if let Some(r) = self.renderer.as_mut() {
-                    r.render(self.view.image_rect(), self.view.zoom);
+                    r.render(self.view.image_rect(), self.view.zoom, self.orient);
                 }
                 if !self.first_frame_done {
                     self.first_frame_done = true;
@@ -963,7 +1198,20 @@ impl ApplicationHandler<UserEvent> for App {
                     self.drag = None;
                     self.open_menu(self.cursor);
                 }
-                (MouseButton::Left, ElementState::Pressed) => self.drag = Some(self.cursor),
+                (MouseButton::Left, ElementState::Pressed) => {
+                    // double click: full screen
+                    let now = Instant::now();
+                    let double = self.last_click.is_some_and(|(t, p)| {
+                        now - t < Duration::from_millis(400) && (p.0 - self.cursor.0).abs() < 6.0 && (p.1 - self.cursor.1).abs() < 6.0
+                    });
+                    if double {
+                        self.last_click = None;
+                        self.toggle_fullscreen();
+                    } else {
+                        self.last_click = Some((now, self.cursor));
+                        self.drag = Some(self.cursor);
+                    }
+                }
                 (MouseButton::Left, ElementState::Released) => self.drag = None,
                 (MouseButton::Back, ElementState::Pressed) => self.step(event_loop, -1),
                 (MouseButton::Forward, ElementState::Pressed) => self.step(event_loop, 1),
@@ -1001,7 +1249,14 @@ fn main() {
     let started = Instant::now();
     // the placement script must be loaded before the window exists (it centres new windows)
     let kwin = std::thread::spawn(kwin::KWin::start);
-    let Some(arg) = std::env::args_os().nth(1) else {
+    let arg = std::env::args_os().nth(1).or_else(|| {
+        // started without a file: ask for one
+        portal::pick_image(None).map(|p| p.into_os_string())
+    });
+    let Some(arg) = arg else {
+        if std::env::args_os().nth(1).is_none() {
+            std::process::exit(0); // the open dialog was cancelled
+        }
         eprintln!("usage: lumaris <image or folder>");
         std::process::exit(2);
     };
@@ -1019,6 +1274,18 @@ fn main() {
             eprintln!("lumaris: no display: {e}");
             std::process::exit(1);
         }
+    };
+    // single instance: hand the file to a running Lumaris
+    let single = if settings::current().bool("SingleInstance") {
+        match instance::claim(files.current(), event_loop.create_proxy()) {
+            Some(instance::Instance::Forwarded) => {
+                drop(kwin.join()); // unloads the placement script again
+                return;
+            }
+            other => other,
+        }
+    } else {
+        None
     };
     let quit = event_loop.create_proxy();
     let _ = ctrlc::set_handler(move || {
@@ -1090,6 +1357,12 @@ fn main() {
         size_before_settings: None,
         info: None,
         info_zoom: 0.0,
+        help: None,
+        orient: 0,
+        last_click: None,
+        user_commands: commands::load(),
+        navigation_panel: settings::current().bool("NavigationPanel"),
+        _instance: single,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("lumaris: {e}");

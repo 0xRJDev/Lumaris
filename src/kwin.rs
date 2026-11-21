@@ -86,13 +86,13 @@ impl KWin {
         Some(KWin { conn, name, frame })
     }
 
-    /// Keeps Lumaris's window above other windows (or not).
-    pub fn set_keep_above(&self, on: bool) {
+    /// Runs a one-off KWin script on Lumaris's window (`w`).
+    fn run_once(&self, name: &str, body: &str) {
         let pid = std::process::id();
         let js = format!(
-            "(function() {{ var l = workspace.windowList(); for (var i = 0; i < l.length; i++) {{ if (l[i].pid == {pid} && l[i].normalWindow) l[i].keepAbove = {on}; }} }})();"
+            "(function() {{ var l = workspace.windowList(); for (var i = 0; i < l.length; i++) {{ var w = l[i]; if (w.pid == {pid} && w.normalWindow) {{ {body} }} }} }})();"
         );
-        let name = format!("lumaris-keepabove-{pid}");
+        let name = format!("lumaris-{name}-{pid}");
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
         let path = dir.join(format!("{name}.js"));
         if std::fs::write(&path, js).is_err() {
@@ -107,6 +107,16 @@ impl KWin {
         }
         let _ = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(name.as_str(),));
         let _ = std::fs::remove_file(&path);
+    }
+
+    /// Keeps Lumaris's window above other windows (or not).
+    pub fn set_keep_above(&self, on: bool) {
+        self.run_once("keepabove", &format!("w.keepAbove = {on};"));
+    }
+
+    /// Brings Lumaris's window to the front (single instance: a new image was opened).
+    pub fn activate(&self) {
+        self.run_once("activate", "if (w.minimized) w.minimized = false; workspace.activeWindow = w;");
     }
 
     pub fn frame(&self) -> Option<Frame> {

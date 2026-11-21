@@ -10,7 +10,7 @@ use crate::ui::{color, draw_text, rounded_rect, style, text_width};
 enum Hit {
     Section(usize),
     Close,
-    EditFile,
+    EditFile(u8),
     Toggle(usize),
     Minus(usize),
     Plus(usize),
@@ -22,7 +22,7 @@ pub enum Outcome {
     Redraw,
     Changed(Settings),
     Close,
-    EditFile,
+    EditFile(u8),
 }
 
 pub struct SettingsPanel {
@@ -116,7 +116,7 @@ impl SettingsPanel {
                 Outcome::Redraw
             }
             Some(Hit::Close) => Outcome::Close,
-            Some(Hit::EditFile) => Outcome::EditFile,
+            Some(Hit::EditFile(w)) => Outcome::EditFile(w),
             Some(Hit::Toggle(i)) => {
                 let v = matches!(self.values.get(i), Value::Bool(true));
                 self.set(i, Value::Bool(!v))
@@ -216,11 +216,12 @@ impl SettingsPanel {
             draw_text(&mut pm, font, name, px, self.u(20.0), baseline_in(top, item_h, px), st.text, 1.0);
             hits.push((Hit::Section(i), rx + self.u(8.0), ry + top, side - self.u(16.0), item_h));
         }
-        // edit the file
-        let link = "Edit settings file…";
-        let link_top = h - self.u(48.0);
-        draw_text(&mut pm, font, link, small, self.u(20.0), baseline_in(link_top, self.u(32.0), small), st.selection, 1.0);
-        hits.push((Hit::EditFile, rx + self.u(12.0), ry + link_top, text_width(font, link, small) + self.u(16.0), self.u(32.0)));
+        // the files
+        for (k, link) in ["Edit settings file…", "Edit key bindings…", "Edit user commands…"].iter().enumerate() {
+            let link_top = h - self.u(32.0) * (3 - k) as f32 - self.u(12.0);
+            draw_text(&mut pm, font, link, small, self.u(20.0), baseline_in(link_top, self.u(32.0), small), st.selection, 1.0);
+            hits.push((Hit::EditFile(k as u8), rx + self.u(12.0), ry + link_top, text_width(font, link, small) + self.u(16.0), self.u(32.0)));
+        }
 
         // close button
         let (cx, cy, cs) = (w - self.u(30.0), self.u(30.0), self.u(6.0));

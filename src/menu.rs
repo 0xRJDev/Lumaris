@@ -26,6 +26,15 @@ pub enum Action {
     SlideshowStart,
     /// an option of a choice list (settings window)
     Choice(usize),
+    Open,
+    Trash,
+    RotateRight,
+    RotateLeft,
+    FlipHorizontal,
+    FlipVertical,
+    NavigationPanel,
+    Help,
+    UserCommand(usize),
     Quit,
 }
 

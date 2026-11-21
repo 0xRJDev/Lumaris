@@ -35,6 +35,7 @@ pub const COLOURS: &[&str] = &["Black", "Dark grey", "Grey", "White"];
 pub const FIT_MODES: &[&str] = &["Shrink large images", "Also enlarge small images"];
 pub const WHEEL: &[&str] = &["Zoom", "Next / previous image"];
 pub const SORT: &[&str] = &["Name", "Date modified", "File size", "Random"];
+pub const TRANSITIONS: &[&str] = &["None", "Fade"];
 pub const RAW: &[&str] = &["Embedded preview (fast)", "Develop RAW (best quality)"];
 
 use Kind::*;
@@ -58,6 +59,10 @@ pub const DEFS: &[Def] = &[
         "While zooming the window grows and shrinks with the image, up to the screen size"),
     def!("Window", "StartFullScreen", "Open in full screen", Bool, B(false), "Start in full screen mode"),
     def!("Window", "KeepAbove", "Keep window above others", Bool, B(false), "Keep the window above other windows (KWin)"),
+    def!("Window", "NavigationPanel", "Navigation panel", Bool, B(true),
+        "Buttons and a zoom map at the bottom of the window, shown while the mouse moves"),
+    def!("Window", "SingleInstance", "Single window", Bool, B(false),
+        "Images opened while Lumaris runs are shown in the running window", restart),
     def!("Background", "BackgroundMode", "Background", Choice(BACKGROUNDS), C(0),
         "What is behind the image and transparent image parts"),
     def!("Background", "BackgroundOpacity", "Background opacity", Number { min: 0.0, max: 100.0, step: 10.0, unit: "%" }, N(0.0),
@@ -81,6 +86,7 @@ pub const DEFS: &[Def] = &[
         "Seconds per image when the slideshow is started from the menu"),
     def!("Slideshow", "SlideshowStopAtEnd", "Stop at the last image", Bool, B(false), "Stop instead of starting over"),
     def!("Slideshow", "SlideshowFullScreen", "Start in full screen", Bool, B(false), "Switch to full screen when a slideshow starts"),
+    def!("Slideshow", "Transition", "Transition", Choice(TRANSITIONS), C(1), "How the slideshow changes images"),
     def!("Formats", "PlayAnimations", "Play animations", Bool, B(true), "Play animated GIF, WebP and PNG files"),
     def!("Formats", "RawMode", "Camera RAW files", Choice(RAW), C(0),
         "Show the camera's embedded preview, or develop the RAW data (slow)"),

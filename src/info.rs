@@ -11,6 +11,8 @@ pub struct InfoBox {
     lines: Vec<(String, String)>,
     pixmap: Option<Pixmap>,
     scale: f32,
+    /// centred in the window (help) instead of the top left corner (image info)
+    centered: bool,
 }
 
 fn human_size(bytes: u64) -> String {
@@ -92,16 +94,29 @@ impl InfoBox {
         }
         lines.push(("Zoom".into(), format!("{:.0}%", zoom * 100.0)));
         exif_lines(path, &mut lines);
-        InfoBox { lines, pixmap: None, scale: scale as f32 }
+        InfoBox { lines, pixmap: None, scale: scale as f32, centered: false }
+    }
+
+    /// A box with the given lines (label, text), centred in the window
+    pub fn with_lines(lines: Vec<(String, String)>, scale: f64) -> InfoBox {
+        InfoBox { lines, pixmap: None, scale: scale as f32, centered: true }
     }
 
     /// The box as a premultiplied RGBA image (pixels, width, height, x, y)
-    pub fn layer(&mut self) -> Option<(&[u8], u32, u32, i32, i32)> {
+    pub fn layer(&mut self, window: (u32, u32)) -> Option<(&[u8], u32, u32, i32, i32)> {
         if self.pixmap.is_none() {
             self.pixmap = self.paint();
         }
         let margin = (12.0 * self.scale) as i32;
-        self.pixmap.as_ref().map(|p| (p.data(), p.width(), p.height(), margin, margin))
+        let centered = self.centered;
+        self.pixmap.as_ref().map(|p| {
+            let (x, y) = if centered {
+                (((window.0 as i32 - p.width() as i32) / 2).max(0), ((window.1 as i32 - p.height() as i32) / 2).max(0))
+            } else {
+                (margin, margin)
+            };
+            (p.data(), p.width(), p.height(), x, y)
+        })
     }
 
     fn paint(&self) -> Option<Pixmap> {

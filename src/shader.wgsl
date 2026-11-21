@@ -11,6 +11,9 @@ struct U {
     mode: u32,
     lod: f32,
     checker: f32,   // checkerboard square size behind transparent parts, 0 = none
+    orient: u32,    // bits 0-1: rotation in 90° steps clockwise, bit 2: flipped horizontally
+    alpha: f32,     // opacity (slideshow fade)
+    pad: vec2<f32>,
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -32,7 +35,15 @@ fn vs_main(@builtin(vertex_index) i: u32) -> VOut {
     let px = mix(u.rect.xy, u.rect.zw, c);
     var o: VOut;
     o.pos = vec4(px.x / u.viewport.x * 2.0 - 1.0, 1.0 - px.y / u.viewport.y * 2.0, 0.0, 1.0);
-    o.uv = c;
+    // orientation: flip in display space, then rotate
+    var d = c;
+    if (u.orient & 4u) != 0u { d.x = 1.0 - d.x; }
+    switch u.orient & 3u {
+        case 1u: { o.uv = vec2(d.y, 1.0 - d.x); }
+        case 2u: { o.uv = vec2(1.0 - d.x, 1.0 - d.y); }
+        case 3u: { o.uv = vec2(1.0 - d.y, d.x); }
+        default: { o.uv = d; }
+    }
     return o;
 }
 
@@ -93,7 +104,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         let q = floor(in.pos.xy / u.checker);
         let light = (i32(q.x) + i32(q.y)) % 2 == 0;
         let chk = select(vec3(0.4), vec3(0.6), light);
-        return vec4(mix(chk, c.rgb, c.a), 1.0);
+        return vec4(mix(chk, c.rgb, c.a), 1.0) * u.alpha;
     }
-    return vec4(c.rgb * c.a, c.a);
+    return vec4(c.rgb * c.a, c.a) * u.alpha;
 }
