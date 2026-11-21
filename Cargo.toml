@@ -17,7 +17,10 @@ wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
-image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "qoi", "ico", "tga", "pnm", "rayon"] }
+image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "qoi", "ico", "tga", "pnm", "avif-native", "rayon"] }
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
+libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
+jxl-oxide = { version = "0.12", default-features = false, features = ["image", "rayon"] }
 
 [profile.release]
 lto = "fat"

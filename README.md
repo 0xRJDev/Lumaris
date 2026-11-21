@@ -12,7 +12,8 @@ A lean and fast image viewer for Linux, written in Rust.
 - Filters: bicubic when enlarging, mipmaps when reducing, sharp square pixels for pixel art
   (images up to 256 px), exact pixels at 100%
 - Next / previous image of the folder in natural order; neighbours are decoded in advance
-- Formats: JPEG, PNG, GIF, WebP, BMP, TIFF, QOI, ICO, TGA, PNM
+- Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
+  (embedded preview, LibRaw), BMP, TIFF, QOI, ICO, TGA, PNM; animated GIF, WebP and PNG
 
 ## Build
 

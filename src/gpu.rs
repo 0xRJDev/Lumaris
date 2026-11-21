@@ -67,8 +67,15 @@ struct Uniforms {
 
 struct ImageTexture {
     bind_group: wgpu::BindGroup,
+    texture: wgpu::Texture,
+    mips: u32,
+    /// texture size
+    tex_w: u32,
+    tex_h: u32,
+    /// image size it represents
     width: u32,
     height: u32,
+    vector: bool,
 }
 
 pub struct Renderer {
@@ -219,17 +226,39 @@ impl Renderer {
 
     /// Uploads the image and builds its mipmaps on the GPU.
     pub fn set_image(&mut self, img: &Decoded) {
+        self.upload(img.pixel_width, img.pixel_height, &img.rgba, (img.width, img.height), img.vector.is_some());
+    }
+
+    /// Next frame of an animation (same size as the current image).
+    pub fn update_pixels(&mut self, rgba: &[u8]) {
+        let Some(img) = &self.image else { return };
+        if rgba.len() != (img.tex_w * img.tex_h * 4) as usize {
+            return;
+        }
+        let size = wgpu::Extent3d { width: img.tex_w, height: img.tex_h, depth_or_array_layers: 1 };
+        self.gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &img.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            rgba,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * img.tex_w), rows_per_image: Some(img.tex_h) },
+            size,
+        );
+        self.generate_mips(&img.texture, img.mips);
+    }
+
+    /// `pixels`: width x height RGBA8; `logical`: the image size it represents (differs for
+    /// vector images rendered at another scale).
+    fn upload(&mut self, width: u32, height: u32, pixels: &[u8], logical: (u32, u32), vector: bool) {
         let max = self.gpu.device.limits().max_texture_dimension_2d;
         let scaled;
-        let (w, h, pixels) = if img.width > max || img.height > max {
+        let (w, h, pixels) = if width > max || height > max {
             // larger than the GPU supports: reduce once on the CPU
-            let src = image::RgbaImage::from_raw(img.width, img.height, img.rgba.clone()).expect("image size");
-            let s = (max as f64 / img.width.max(img.height) as f64).min(1.0);
-            let (nw, nh) = (((img.width as f64 * s) as u32).max(1), ((img.height as f64 * s) as u32).max(1));
+            let src = image::RgbaImage::from_raw(width, height, pixels.to_vec()).expect("image size");
+            let s = (max as f64 / width.max(height) as f64).min(1.0);
+            let (nw, nh) = (((width as f64 * s) as u32).max(1), ((height as f64 * s) as u32).max(1));
             scaled = image::imageops::resize(&src, nw, nh, image::imageops::FilterType::Triangle);
             (nw, nh, scaled.as_raw().as_slice())
         } else {
-            (img.width, img.height, img.rgba.as_slice())
+            (width, height, pixels)
         };
         let device = &self.gpu.device;
         let mips = 32 - w.max(h).leading_zeros();
@@ -250,6 +279,35 @@ impl Renderer {
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
             size,
         );
+        self.generate_mips(&texture, mips);
+        let view = texture.create_view(&Default::default());
+        let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("image"),
+            layout: &self.layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.linear) },
+                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
+            ],
+        });
+        self.image = Some(ImageTexture { bind_group, texture, mips, tex_w: w, tex_h: h, width: logical.0, height: logical.1, vector });
+    }
+
+    /// Re-rendered vector image (same logical size, other pixel size).
+    pub fn replace_vector_pixels(&mut self, img: &Decoded) {
+        if self.image.as_ref().is_some_and(|i| i.vector && i.width == img.width && i.height == img.height) {
+            self.set_image(img);
+        }
+    }
+
+    /// Pixel size of the current image texture
+    pub fn texture_size(&self) -> Option<(u32, u32)> {
+        self.image.as_ref().map(|i| (i.tex_w, i.tex_h))
+    }
+
+    fn generate_mips(&self, texture: &wgpu::Texture, mips: u32) {
+        let device = &self.gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
         for level in 1..mips {
             let view = |l| {
@@ -278,20 +336,6 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         self.gpu.queue.submit([encoder.finish()]);
-
-        let view = texture.create_view(&Default::default());
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("image"),
-            layout: &self.layout,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: self.uniforms.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&view) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.linear) },
-                wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
-            ],
-        });
-        // width/height: the original size, so the pixel art rule and zoom refer to the file
-        self.image = Some(ImageTexture { bind_group, width: img.width, height: img.height });
     }
 
     pub fn clear_image(&mut self) {
@@ -322,8 +366,11 @@ impl Renderer {
                 ..Default::default()
             });
             if let Some(img) = &self.image {
-                let pixel_art = img.width.max(img.height) <= PIXEL_ART_MAX;
-                let (mode, lod) = if (zoom - 1.0).abs() < 1e-9 {
+                let pixel_art = !img.vector && img.width.max(img.height) <= PIXEL_ART_MAX;
+                // zoom relative to the texture pixels
+                let zoom = zoom * img.width as f64 / img.tex_w as f64;
+                let aligned = rect[0].fract() == 0.0 && rect[1].fract() == 0.0;
+                let (mode, lod) = if (zoom - 1.0).abs() < 1e-6 && aligned {
                     (3, 0.0)
                 } else if zoom > 1.0 {
                     (if pixel_art { 2 } else { 1 }, 0.0)
@@ -333,7 +380,7 @@ impl Renderer {
                 let u = Uniforms {
                     rect,
                     viewport: [self.config.width as f32, self.config.height as f32],
-                    tex_size: [img.width as f32, img.height as f32],
+                    tex_size: [img.tex_w as f32, img.tex_h as f32],
                     zoom: zoom as f32,
                     mode,
                     lod,

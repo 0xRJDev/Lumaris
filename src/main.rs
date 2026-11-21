@@ -5,6 +5,7 @@ mod decode;
 mod files;
 mod gpu;
 mod kwin;
+mod raw;
 mod view;
 
 use std::collections::HashSet;
@@ -41,6 +42,15 @@ pub enum UserEvent {
     Quit,
     /// Test script command (LUMARIS_AUTOTEST=<file>, one command per line)
     Test(String),
+    /// A vector image re-rendered for the current zoom (path, request number)
+    VectorRendered(PathBuf, u64, Result<Arc<Decoded>, String>),
+}
+
+/// The animation being played: image, current frame, when the next frame is due
+struct Animation {
+    image: Arc<Decoded>,
+    frame: usize,
+    due: Instant,
 }
 
 struct App {
@@ -68,6 +78,12 @@ struct App {
     next_slide: Option<Instant>,
     /// Next after the last image goes to the first one (and back)
     loop_folder: bool,
+    animation: Option<Animation>,
+    proxy: winit::event_loop::EventLoopProxy<UserEvent>,
+    /// Vector image re-rendering: request number and the scale requested last
+    vector_request: u64,
+    vector_scale: f64,
+    current: Option<Arc<Decoded>>,
 }
 
 impl App {
@@ -165,6 +181,45 @@ impl App {
         self.shown = Some(path);
         self.fit(event_loop);
         self.next_slide = self.slideshow.map(|d| Instant::now() + d);
+        self.animation = (img.frames.len() > 1).then(|| Animation { due: Instant::now() + img.frames[0].delay, image: img.clone(), frame: 0 });
+        self.vector_request += 1;
+        self.vector_scale = img.pixel_width as f64 / img.width as f64;
+        self.current = Some(img);
+    }
+
+    /// Vector images: render again at the displayed size once the zoom has settled.
+    fn update_vector(&mut self) {
+        let Some(img) = self.current.clone() else { return };
+        let Some(tree) = img.vector.clone() else { return };
+        let scale = self.view.zoom;
+        let limit = (decode::MAX_VECTOR_PIXELS / (img.width as f64 * img.height as f64)).sqrt();
+        let wanted = scale.min(limit);
+        if (wanted / self.vector_scale - 1.0).abs() < 0.05 {
+            return;
+        }
+        self.vector_scale = wanted;
+        self.vector_request += 1;
+        let (id, proxy, path) = (self.vector_request, self.proxy.clone(), self.files.current().to_path_buf());
+        std::thread::spawn(move || {
+            let r = decode::render_svg(tree, img.width, img.height, wanted).map(Arc::new);
+            let _ = proxy.send_event(UserEvent::VectorRendered(path, id, r));
+        });
+    }
+
+    fn next_animation_frame(&mut self) {
+        let Some(a) = self.animation.as_mut() else { return };
+        let now = Instant::now();
+        if now < a.due {
+            return;
+        }
+        a.frame = (a.frame + 1) % a.image.frames.len();
+        let f = &a.image.frames[a.frame];
+        // keep the timing, unless far behind (e.g. after the window was hidden)
+        a.due = if now - a.due > f.delay { now + f.delay } else { a.due + f.delay };
+        if let Some(r) = self.renderer.as_mut() {
+            r.update_pixels(&f.rgba);
+        }
+        self.redraw();
     }
 
     fn go_to(&mut self, event_loop: &ActiveEventLoop, index: usize) {
@@ -339,7 +394,7 @@ impl App {
             ["info"] => {
                 let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
                 let r = self.view.image_rect();
-                println!("INFO index={} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.files.index, self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
+                println!("INFO index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
             }
             ["quit"] => event_loop.exit(),
             _ => eprintln!("lumaris: unknown test command: {cmd}"),
@@ -359,7 +414,9 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
         }
-        match self.next_slide {
+        self.next_animation_frame();
+        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due)].into_iter().flatten().min();
+        match next {
             Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
         }
@@ -429,6 +486,15 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Decoded(path, result) => (path, result),
             UserEvent::Quit => return event_loop.exit(),
             UserEvent::Test(cmd) => return self.test_command(event_loop, &cmd),
+            UserEvent::VectorRendered(path, id, result) => {
+                if let (Ok(img), true) = (result, id == self.vector_request && self.files.current() == path) {
+                    if let Some(r) = self.renderer.as_mut() {
+                        r.replace_vector_pixels(&img);
+                    }
+                    self.redraw();
+                }
+                return;
+            }
         };
         self.in_flight.remove(&path);
         let current = self.files.current() == path;
@@ -447,6 +513,8 @@ impl ApplicationHandler<UserEvent> for App {
                     if let Some(r) = self.renderer.as_mut() {
                         r.clear_image();
                     }
+                    self.animation = None;
+                    self.current = None;
                     if let Some(w) = &self.window {
                         w.set_title(&Self::title_for(&path, " (cannot open)"));
                     }
@@ -481,6 +549,8 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if animating {
                     self.redraw();
+                } else {
+                    self.update_vector();
                 }
             }
             WindowEvent::CursorMoved { position: PhysicalPosition { x, y }, .. } => {
@@ -603,6 +673,11 @@ fn main() {
         slideshow: None,
         next_slide: None,
         loop_folder: true,
+        animation: None,
+        proxy: event_loop.create_proxy(),
+        vector_request: 0,
+        vector_scale: 1.0,
+        current: None,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("lumaris: {e}");

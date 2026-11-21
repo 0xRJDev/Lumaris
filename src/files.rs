@@ -4,13 +4,15 @@ use std::path::{Path, PathBuf};
 
 const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "bmp", "dib", "tif", "tiff", "qoi",
-    "ico", "tga", "pnm", "pbm", "pgm", "ppm", "pam",
+    "ico", "tga", "pnm", "pbm", "pgm", "ppm", "pam", "svg", "svgz", "avif", "heic", "heif", "hif", "jxl",
 ];
 
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| EXTENSIONS.iter().any(|x| x.eq_ignore_ascii_case(e)))
+        .is_some_and(|e| {
+            EXTENSIONS.iter().chain(crate::decode::RAW_EXTENSIONS).any(|x| x.eq_ignore_ascii_case(e))
+        })
 }
 
 pub struct FileList {
