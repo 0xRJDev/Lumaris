@@ -22,11 +22,13 @@ pub struct View {
     /// fit also enlarges small images
     enlarge: bool,
     smooth: bool,
+    /// fit enlarges small images at least to this zoom (smallest opening size)
+    min_fit: f64,
 }
 
 impl View {
     pub fn new() -> View {
-        View { img: (1.0, 1.0), win: (1.0, 1.0), zoom: 1.0, target: 1.0, anchor: (0.0, 0.0), point: (0.0, 0.0), last_tick: None, fit_mode: true, enlarge: false, smooth: true }
+        View { img: (1.0, 1.0), win: (1.0, 1.0), zoom: 1.0, target: 1.0, anchor: (0.0, 0.0), point: (0.0, 0.0), last_tick: None, fit_mode: true, enlarge: false, smooth: true, min_fit: 1.0 }
     }
 
     pub fn configure(&mut self, enlarge: bool, smooth: bool) {
@@ -37,7 +39,11 @@ impl View {
     /// Zoom that shows the whole image (enlarges small images only if configured).
     pub fn fit_zoom(&self) -> f64 {
         let z = (self.win.0 / self.img.0).min(self.win.1 / self.img.1);
-        if self.enlarge { z } else { z.min(1.0) }
+        if self.enlarge { z } else { z.min(1.0).max(self.min_fit.min(z)) }
+    }
+
+    pub fn set_min_fit_zoom(&mut self, z: f64) {
+        self.min_fit = z;
     }
 
     /// Another image at the same zoom, centred (keep zoom on navigation).

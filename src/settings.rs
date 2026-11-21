@@ -53,6 +53,8 @@ macro_rules! def {
 pub const DEFS: &[Def] = &[
     def!("Window", "MaxWindowSize", "Opening size (part of the screen)", Number { min: 30.0, max: 100.0, step: 5.0, unit: "%" }, N(80.0),
         "Largest part of the screen a new window may take; the image is fitted into it"),
+    def!("Window", "MinWindowSize", "Smallest opening size", Number { min: 0.0, max: 50.0, step: 5.0, unit: "%" }, N(10.0),
+        "Small images open enlarged to at least this part of the screen height (zooming out still works)"),
     def!("Window", "MaxWindowAspect", "Widest window shape", Choice(ASPECTS), C(2),
         "Widest window aspect ratio, unless the image itself is wider"),
     def!("Window", "WindowFollowsZoom", "Window follows the zoom", Bool, B(true),

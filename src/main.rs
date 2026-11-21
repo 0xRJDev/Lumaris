@@ -117,13 +117,23 @@ struct App {
 }
 
 impl App {
-    fn window_size_for(&self, w: u32, h: u32, screen: PhysicalSize<u32>) -> PhysicalSize<u32> {
+    /// Zoom an image opens with: fitted into the opening area, small images enlarged to the
+    /// smallest opening size.
+    fn open_zoom(&self, w: u32, h: u32, screen: PhysicalSize<u32>) -> f64 {
         let (iw, ih) = (w.max(1) as f64, h.max(1) as f64);
-        let percent = settings::current().number("MaxWindowSize");
+        let s = settings::current();
+        let percent = s.number("MaxWindowSize");
         let mut aw = screen.width as f64 * percent / 100.0;
         let ah = screen.height as f64 * percent / 100.0;
         aw = aw.min(ah * max_aspect().max(iw / ih));
-        let z = (aw / iw).min(ah / ih).min(1.0);
+        let fit = (aw / iw).min(ah / ih);
+        let smallest = s.number("MinWindowSize") / 100.0 * screen.height as f64 / iw.max(ih);
+        fit.min(1.0).max(smallest.min(fit))
+    }
+
+    fn window_size_for(&self, w: u32, h: u32, screen: PhysicalSize<u32>) -> PhysicalSize<u32> {
+        let (iw, ih) = (w.max(1) as f64, h.max(1) as f64);
+        let z = self.open_zoom(w, h, screen);
         PhysicalSize::new(((iw * z).round() as u32).max(MIN_WINDOW.0), ((ih * z).round() as u32).max(MIN_WINDOW.1))
     }
 
@@ -160,8 +170,10 @@ impl App {
 
     /// Fits the window to the image (windowed mode) and the image to the window.
     fn fit(&mut self, event_loop: &ActiveEventLoop) {
+        let (iw, ih) = self.view.image_size();
+        let open = self.open_zoom(iw as u32, ih as u32, self.screen_size(event_loop));
+        self.view.set_min_fit_zoom(open.max(1.0)); // small images: enlarged at least to the opening size
         if self.windowed().is_some() {
-            let (iw, ih) = self.view.image_size();
             let size = self.window_size_for(iw as u32, ih as u32, self.screen_size(event_loop));
             self.apply_window_size(size);
         }

@@ -23,7 +23,10 @@ A lean and fast image viewer for Linux, written in Rust.
   solid colour, checkerboard), zoom, navigation (sort order), slideshow, formats; saved to
   `~/.config/lumaris/lumaris.conf`, which can also be edited by hand
 - Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
-  (embedded preview, LibRaw), BMP, TIFF, QOI, ICO, TGA, PNM; animated GIF, WebP and PNG
+  (LibRaw), EXR and Radiance HDR (tone mapped), PSD/PSB, Krita, OpenRaster, BMP, TIFF, QOI, ICO,
+  TGA, PNM, DDS, farbfeld; animated GIF, WebP and PNG; embedded colour profiles
+- Navigation panel (buttons and a zoom map), rotate / flip, move to trash, open dialog, drag and
+  drop, single window mode, slideshow with fade, histogram, user commands, F1 key help
 
 ## Build and install
 
@@ -36,20 +39,25 @@ Or only build: `cargo build --release`, then run `target/release/lumaris`.
 
 ## Keys
 
+Press F1 in Lumaris for the full list. All keys can be changed in
+`~/.config/lumaris/keys.conf` (Settings > Edit key bindings).
+
 | Key | Action |
 |---|---|
-| Right, Page Down / Left, Page Up, Backspace | Next / previous image (loops through the folder) |
-| Home / End | First / last image |
+| Right, Page Down / Left, Page Up, Backspace | Next / previous image |
 | Mouse wheel, + / - | Zoom around the pointer |
-| Space / Enter | Fit to window or 100% / fit to window |
-| 1 to 9 | Slideshow, 1 to 9 seconds per image (Ctrl: tenths of a second) |
+| Space / Enter / 0 | Fit or 100% / fit / 100% |
+| Up, Down, Ctrl+Left, Ctrl+Right | Move the image when zoomed in |
+| R / Shift+R, H / V | Rotate right / left, flip horizontally / vertically |
+| 1 to 9 | Slideshow, 1 to 9 seconds per image |
 | Ctrl+C / Ctrl+Shift+C | Copy the image / its file path |
-| I | Image info |
-| Ctrl+, | Settings |
-| F11 | Full screen |
+| Ctrl+O, Delete | Open image, move to trash |
+| I, N, F1, Ctrl+, | Image info, navigation panel, keys, settings |
+| F11, F, double click | Full screen |
 | Esc | Close a panel, stop the slideshow, leave full screen, quit |
-| Right click | Menu |
-| Mouse back / forward | Previous / next image |
+
+User commands for the menu and keys: `~/.config/lumaris/commands.conf` (Settings > Edit user
+commands).
 
 Copying needs `wl-clipboard` (Wayland) or `xclip` (X11).
 
