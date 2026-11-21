@@ -1379,7 +1379,9 @@ fn main() {
     }
     // decode the first image while the GPU starts up
     let first_path = files.current().to_path_buf();
-    let first = std::thread::spawn(move || decode::decode(&first_path).map(Arc::new));
+    let first = std::thread::spawn(move || {
+        std::panic::catch_unwind(|| decode::decode(&first_path)).unwrap_or_else(|_| Err("the file could not be decoded".into())).map(Arc::new)
+    });
     let gpu = match pollster::block_on(gpu::Gpu::new()) {
         Ok(g) => g,
         Err(e) => {

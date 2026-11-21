@@ -58,6 +58,8 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
         "svg" | "svgz" => decode_svg(path),
         "heic" | "heif" | "hif" => decode_heif(path),
         "jxl" => decode_jxl(path),
+        "psd" | "psb" => decode_psd(path),
+        "kra" | "ora" => decode_merged_image(path),
         e if RAW_EXTENSIONS.contains(&e) => {
             let develop = crate::settings::current().choice("RawMode") == 1;
             crate::raw::decode(path, develop).map(Decoded::raster)
@@ -98,11 +100,129 @@ fn decode_image(path: &Path) -> Result<Decoded, String> {
     let icc = if crate::settings::current().bool("ColourProfiles") { decoder.icc_profile().ok().flatten() } else { None };
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
     img.apply_orientation(orientation);
-    let mut d = Decoded::raster(img);
+    let mut d = match img {
+        // floating point images (EXR, HDR) hold linear light: tone map to sRGB
+        DynamicImage::ImageRgb32F(_) | DynamicImage::ImageRgba32F(_) => tone_map(img.into_rgba32f()),
+        img => Decoded::raster(img),
+    };
     if let Some(icc) = icc {
         to_srgb(&icc, &mut d.rgba);
     }
     Ok(d)
+}
+
+/// Linear light (HDR) to 8 bit sRGB: a soft shoulder keeps highlights instead of clipping them.
+fn tone_map(img: image::Rgba32FImage) -> Decoded {
+    let (w, h) = img.dimensions();
+    let encode = |v: f32| {
+        let v = if v.is_finite() { v.max(0.0) } else { 0.0 };
+        let v = v / (1.0 + v * 0.15); // gentle compression above 1
+        let s = if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+        (s.clamp(0.0, 1.0) * 255.0 + 0.5) as u8
+    };
+    let mut rgba = Vec::with_capacity((w * h * 4) as usize);
+    for p in img.pixels() {
+        rgba.extend_from_slice(&[encode(p.0[0]), encode(p.0[1]), encode(p.0[2]), (p.0[3].clamp(0.0, 1.0) * 255.0 + 0.5) as u8]);
+    }
+    Decoded { width: w, height: h, rgba, frames: Vec::new(), vector: None, pixel_width: w, pixel_height: h }
+}
+
+/// Photoshop (PSD/PSB): the flattened image every file contains (the image data section).
+/// 8 and 16 bit RGB and grayscale, raw or RLE compressed.
+fn decode_psd(path: &Path) -> Result<Decoded, String> {
+    let data = std::fs::read(path).map_err(|e| e.to_string())?;
+    let bad = || "not a supported Photoshop file".to_string();
+    let be16 = |o: usize| data.get(o..o + 2).map(|b| u16::from_be_bytes([b[0], b[1]]) as usize).ok_or_else(bad);
+    let be32 = |o: usize| data.get(o..o + 4).map(|b| u32::from_be_bytes([b[0], b[1], b[2], b[3]]) as usize).ok_or_else(bad);
+    if data.get(0..4) != Some(b"8BPS") {
+        return Err(bad());
+    }
+    let psb = be16(4)? == 2;
+    let channels = be16(12)?;
+    let (h, w) = (be32(14)?, be32(18)?);
+    let depth = be16(22)?;
+    let mode = be16(24)?; // 1 grayscale, 3 RGB
+    if !(depth == 8 || depth == 16) || !(mode == 1 || mode == 3) || w == 0 || h == 0 {
+        return Err(bad());
+    }
+    let mut o = 26;
+    o += 4 + be32(o)?; // colour mode data
+    o += 4 + be32(o)?; // image resources
+    o += if psb { 8 + ((be32(o)? << 32) | be32(o + 4)?) } else { 4 + be32(o)? }; // layers and masks
+    let compression = be16(o)?;
+    o += 2;
+    let bpc = depth / 8;
+    let row = w * bpc;
+    // planes: one per channel, rows of `row` bytes
+    let mut planes = vec![vec![0u8; row * h]; channels];
+    match compression {
+        0 => {
+            for plane in planes.iter_mut() {
+                let src = data.get(o..o + row * h).ok_or_else(bad)?;
+                plane.copy_from_slice(src);
+                o += row * h;
+            }
+        }
+        1 => {
+            let count_size = if psb { 4 } else { 2 };
+            let counts: Vec<usize> = (0..channels * h)
+                .map(|i| if psb { be32(o + i * 4) } else { be16(o + i * 2) })
+                .collect::<Result<_, _>>()?;
+            o += channels * h * count_size;
+            for (c, plane) in planes.iter_mut().enumerate() {
+                for y in 0..h {
+                    let n = counts[c * h + y];
+                    let src = data.get(o..o + n).ok_or_else(bad)?;
+                    o += n;
+                    // PackBits
+                    let dst = &mut plane[y * row..(y + 1) * row];
+                    let (mut i, mut j) = (0, 0);
+                    while i < src.len() && j < row {
+                        let k = src[i] as i8;
+                        i += 1;
+                        if k >= 0 {
+                            let len = (k as usize + 1).min(row - j).min(src.len() - i);
+                            dst[j..j + len].copy_from_slice(&src[i..i + len]);
+                            i += k as usize + 1;
+                            j += len;
+                        } else if k != -128 {
+                            let len = ((1 - k as isize) as usize).min(row - j);
+                            let v = *src.get(i).ok_or_else(bad)?;
+                            dst[j..j + len].fill(v);
+                            i += 1;
+                            j += len;
+                        }
+                    }
+                }
+            }
+        }
+        _ => return Err(bad()),
+    }
+    let colour = if mode == 3 { 3 } else { 1 };
+    let alpha = channels > colour;
+    let sample = |plane: &Vec<u8>, i: usize| if bpc == 2 { plane[i * 2] } else { plane[i] }; // high byte for 16 bit
+    let mut rgba = Vec::with_capacity(w * h * 4);
+    for i in 0..w * h {
+        let (r, g, b) = if colour == 3 { (sample(&planes[0], i), sample(&planes[1], i), sample(&planes[2], i)) } else {
+            let v = sample(&planes[0], i);
+            (v, v, v)
+        };
+        let a = if alpha { sample(&planes[colour], i) } else { 255 };
+        rgba.extend_from_slice(&[r, g, b, a]);
+    }
+    let (w, h) = (w as u32, h as u32);
+    Ok(Decoded { width: w, height: h, rgba, frames: Vec::new(), vector: None, pixel_width: w, pixel_height: h })
+}
+
+/// Krita and OpenRaster files: zip archives with the merged image as mergedimage.png
+fn decode_merged_image(path: &Path) -> Result<Decoded, String> {
+    let file = std::fs::File::open(path).map_err(|e| e.to_string())?;
+    let mut zip = zip::ZipArchive::new(file).map_err(|e| e.to_string())?;
+    let mut entry = zip.by_name("mergedimage.png").map_err(|_| "no merged image in the file".to_string())?;
+    let mut png = Vec::new();
+    std::io::Read::read_to_end(&mut entry, &mut png).map_err(|e| e.to_string())?;
+    let img = image::load_from_memory_with_format(&png, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(Decoded::raster(img))
 }
 
 /// Converts RGBA8 pixels from the embedded colour profile to sRGB (Little CMS).
@@ -201,6 +321,7 @@ fn decode_heif(path: &Path) -> Result<Decoded, String> {
     let ctx = HeifContext::read_from_file(path.to_str().ok_or("path")?).map_err(|e| e.to_string())?;
     let handle = ctx.primary_image_handle().map_err(|e| e.to_string())?;
     // libheif applies the orientation (irot/imir) while decoding
+    let icc = handle.color_profile_raw().map(|p| p.data);
     let img = lib.decode(&handle, ColorSpace::Rgb(RgbChroma::Rgba), None).map_err(|e| e.to_string())?;
     let planes = img.planes();
     let plane = planes.interleaved.ok_or("no image data")?;
@@ -209,13 +330,21 @@ fn decode_heif(path: &Path) -> Result<Decoded, String> {
     for row in plane.data.chunks(plane.stride).take(h as usize) {
         rgba.extend_from_slice(&row[..(w * 4) as usize]);
     }
+    if let (Some(icc), true) = (icc, crate::settings::current().bool("ColourProfiles")) {
+        to_srgb(&icc, &mut rgba);
+    }
     Ok(Decoded { width: w, height: h, rgba, frames: Vec::new(), vector: None, pixel_width: w, pixel_height: h })
 }
 
 fn decode_jxl(path: &Path) -> Result<Decoded, String> {
-    let decoder = jxl_oxide::integration::JxlDecoder::new(open(path)?).map_err(|e| e.to_string())?;
+    let mut decoder = jxl_oxide::integration::JxlDecoder::new(open(path)?).map_err(|e| e.to_string())?;
+    let icc = if crate::settings::current().bool("ColourProfiles") { decoder.icc_profile().ok().flatten() } else { None };
     let img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
-    Ok(Decoded::raster(img))
+    let mut d = Decoded::raster(img);
+    if let Some(icc) = icc {
+        to_srgb(&icc, &mut d.rgba);
+    }
+    Ok(d)
 }
 
 /// Decodes requested files on background threads; results arrive as `UserEvent::Decoded`.
@@ -233,7 +362,10 @@ impl Loader {
             thread::spawn(move || loop {
                 let next = rx.lock().unwrap().recv();
                 let Ok(path) = next else { break };
-                let result = decode(&path).map(Arc::new);
+                // a crashing decoder (damaged file) must not end Lumaris
+                let result = std::panic::catch_unwind(|| decode(&path))
+                    .unwrap_or_else(|_| Err("the file could not be decoded".into()))
+                    .map(Arc::new);
                 if proxy.send_event(UserEvent::Decoded(path, result)).is_err() {
                     break;
                 }
