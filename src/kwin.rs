@@ -1,10 +1,10 @@
 // Window placement on KWin (Wayland clients cannot position their windows).
 //
-// A small KWin script is loaded over D-Bus for Lumae's lifetime (nothing is installed, it is
-// unloaded at exit). It centres Lumae's window when KWin adds it - before the first frame, so
-// the window does not visibly move - and keeps the window centre in place whenever Lumae
+// A small KWin script is loaded over D-Bus for Lumaris's lifetime (nothing is installed, it is
+// unloaded at exit). It centres Lumaris's window when KWin adds it - before the first frame, so
+// the window does not visibly move - and keeps the window centre in place whenever Lumaris
 // resizes the window (new image, zoom), in the same frame. It also reports the window frame
-// (decoration) size and the usable screen area, so Lumae can keep the window on screen.
+// (decoration) size and the usable screen area, so Lumaris can keep the window on screen.
 use std::sync::{Arc, Mutex};
 
 use zbus::blocking::Connection;
@@ -22,7 +22,7 @@ struct Receiver {
     frame: Arc<Mutex<Option<Frame>>>,
 }
 
-#[zbus::interface(name = "org.lumae.Placement")]
+#[zbus::interface(name = "org.lumaris.Placement")]
 impl Receiver {
     /// "left,top,right,bottom,areaWidth,areaHeight"
     #[zbus(name = "frame")]
@@ -47,7 +47,7 @@ impl KWin {
         let frame = Arc::new(Mutex::new(None));
         let conn = zbus::blocking::connection::Builder::session()
             .ok()?
-            .serve_at("/lumae/placement", Receiver { frame: frame.clone() })
+            .serve_at("/lumaris/placement", Receiver { frame: frame.clone() })
             .ok()?
             .build()
             .ok()?;
@@ -62,7 +62,7 @@ impl KWin {
         }
         let service = conn.unique_name()?.to_string();
         let pid = std::process::id();
-        let name = format!("lumae-keepcenter-{pid}");
+        let name = format!("lumaris-keepcenter-{pid}");
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
         let path = dir.join(format!("{name}.js"));
         let script = SCRIPT.replace("%PID%", &pid.to_string()).replace("%SERVICE%", &service);
@@ -106,7 +106,7 @@ const SCRIPT: &str = r#"(function() {
       var g = w.frameGeometry, c = w.clientGeometry, a = workspace.clientArea(KWin.PlacementArea, w);
       var m = [c.x - g.x, c.y - g.y, g.x + g.width - c.x - c.width, g.y + g.height - c.y - c.height, a.width, a.height]
         .map(function(v) { return Math.round(v); }).join(',');
-      if (m != info) { info = m; callDBus(SERVICE, '/lumae/placement', 'org.lumae.Placement', 'frame', m); }
+      if (m != info) { info = m; callDBus(SERVICE, '/lumaris/placement', 'org.lumaris.Placement', 'frame', m); }
     }
     function remember() { var g = w.frameGeometry; cx = g.x + g.width / 2; cy = g.y + g.height / 2; lastSize = { width: g.width, height: g.height }; }
     if (fresh) {

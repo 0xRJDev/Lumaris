@@ -1,4 +1,4 @@
-// Lumae - lean and fast image viewer for Linux
+// Lumaris - lean and fast image viewer for Linux
 // SPDX-License-Identifier: GPL-2.0-or-later
 mod blur;
 mod decode;
@@ -10,14 +10,14 @@ mod view;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use decode::{Decoded, Loader};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
-use winit::keyboard::{Key, NamedKey};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
 /// The window is fitted to the image within this part of the screen.
@@ -39,7 +39,7 @@ pub enum UserEvent {
     Decoded(PathBuf, Result<Arc<Decoded>, String>),
     /// SIGINT / SIGTERM: quit normally (unloads the KWin script)
     Quit,
-    /// Test script command (LUMAE_AUTOTEST=<file>, one command per line)
+    /// Test script command (LUMARIS_AUTOTEST=<file>, one command per line)
     Test(String),
 }
 
@@ -62,6 +62,12 @@ struct App {
     timing: bool,
     first_frame_done: bool,
     followed_zoom: f64,
+    mods: ModifiersState,
+    /// Slideshow interval, and when the next image is due
+    slideshow: Option<Duration>,
+    next_slide: Option<Instant>,
+    /// Next after the last image goes to the first one (and back)
+    loop_folder: bool,
 }
 
 impl App {
@@ -148,7 +154,7 @@ impl App {
 
     fn title_for(path: &Path, suffix: &str) -> String {
         let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        format!("{name}{suffix} - Lumae")
+        format!("{name}{suffix} - Lumaris")
     }
 
     fn show(&mut self, event_loop: &ActiveEventLoop, path: PathBuf, img: Arc<Decoded>) {
@@ -158,6 +164,7 @@ impl App {
         self.view.set_image(img.width, img.height);
         self.shown = Some(path);
         self.fit(event_loop);
+        self.next_slide = self.slideshow.map(|d| Instant::now() + d);
     }
 
     fn go_to(&mut self, event_loop: &ActiveEventLoop, index: usize) {
@@ -182,24 +189,48 @@ impl App {
     }
 
     fn prefetch(&mut self) {
-        let i = self.files.index;
-        let neighbours = [i + 1, i.wrapping_sub(1)];
-        for n in neighbours {
-            if let Some(p) = self.files.files.get(n).cloned() {
-                if !self.cache.iter().any(|(c, _)| *c == p) {
-                    self.request(p);
-                }
+        let (i, n) = (self.files.index, self.files.files.len());
+        for k in [self.neighbour(1), self.neighbour(-1)].into_iter().flatten() {
+            let p = self.files.files[k].clone();
+            if !self.cache.iter().any(|(c, _)| *c == p) {
+                self.request(p);
             }
         }
-        // drop images far from the current one
+        // drop images far from the current one (the folder may loop)
         let files = &self.files.files;
-        self.cache.retain(|(p, _)| files.iter().position(|f| f == p).is_some_and(|k| k.abs_diff(i) <= CACHE_RADIUS));
+        self.cache.retain(|(p, _)| {
+            files.iter().position(|f| f == p).is_some_and(|k| {
+                let d = k.abs_diff(i);
+                d.min(n - d) <= CACHE_RADIUS
+            })
+        });
+    }
+
+    /// Index `delta` images away, looping through the folder if enabled
+    fn neighbour(&self, delta: isize) -> Option<usize> {
+        let n = self.files.files.len() as isize;
+        let k = self.files.index as isize + delta;
+        if self.loop_folder {
+            Some(k.rem_euclid(n) as usize)
+        } else {
+            (0..n).contains(&k).then_some(k as usize)
+        }
     }
 
     fn step(&mut self, event_loop: &ActiveEventLoop, delta: isize) {
-        let n = self.files.files.len() as isize;
-        let target = (self.files.index as isize + delta).clamp(0, n - 1) as usize;
-        self.go_to(event_loop, target);
+        if let Some(k) = self.neighbour(delta) {
+            self.go_to(event_loop, k);
+        }
+    }
+
+    fn start_slideshow(&mut self, interval: Duration) {
+        self.slideshow = Some(interval);
+        self.next_slide = Some(Instant::now() + interval);
+    }
+
+    fn stop_slideshow(&mut self) {
+        self.slideshow = None;
+        self.next_slide = None;
     }
 
     fn toggle_fullscreen(&self) {
@@ -218,15 +249,36 @@ impl App {
         self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width as f64 / 2.0, s.height as f64 / 2.0)).unwrap_or((0.0, 0.0))
     }
 
-    fn key(&mut self, event_loop: &ActiveEventLoop, key: Key) {
+    fn key(&mut self, event_loop: &ActiveEventLoop, key: Key, code: Option<KeyCode>) {
+        // 1..9: slideshow with 1..9 seconds per image (Ctrl: tenths, Ctrl+Shift: hundredths)
+        let digit = match code {
+            Some(KeyCode::Digit1 | KeyCode::Numpad1) => 1,
+            Some(KeyCode::Digit2 | KeyCode::Numpad2) => 2,
+            Some(KeyCode::Digit3 | KeyCode::Numpad3) => 3,
+            Some(KeyCode::Digit4 | KeyCode::Numpad4) => 4,
+            Some(KeyCode::Digit5 | KeyCode::Numpad5) => 5,
+            Some(KeyCode::Digit6 | KeyCode::Numpad6) => 6,
+            Some(KeyCode::Digit7 | KeyCode::Numpad7) => 7,
+            Some(KeyCode::Digit8 | KeyCode::Numpad8) => 8,
+            Some(KeyCode::Digit9 | KeyCode::Numpad9) => 9,
+            _ => 0,
+        };
+        let (ctrl, shift) = (self.mods.control_key(), self.mods.shift_key());
+        if digit > 0 && (!shift || ctrl) {
+            let ms = digit * if ctrl && shift { 10 } else if ctrl { 100 } else { 1000 };
+            self.start_slideshow(Duration::from_millis(ms));
+            return;
+        }
         match key.as_ref() {
-            Key::Named(NamedKey::ArrowRight | NamedKey::PageDown | NamedKey::Space) => self.step(event_loop, 1),
+            Key::Named(NamedKey::ArrowRight | NamedKey::PageDown) => self.step(event_loop, 1),
             Key::Named(NamedKey::ArrowLeft | NamedKey::PageUp | NamedKey::Backspace) => self.step(event_loop, -1),
             Key::Named(NamedKey::Home) => self.go_to(event_loop, 0),
             Key::Named(NamedKey::End) => self.go_to(event_loop, self.files.files.len() - 1),
             Key::Named(NamedKey::F11) => self.toggle_fullscreen(),
             Key::Named(NamedKey::Escape) => {
-                if self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()) {
+                if self.slideshow.is_some() {
+                    self.stop_slideshow();
+                } else if self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()) {
                     self.toggle_fullscreen();
                 } else {
                     event_loop.exit();
@@ -242,11 +294,16 @@ impl App {
                 self.view.zoom_at(1.0 / WHEEL_STEP, c);
                 self.redraw();
             }
-            Key::Character("0" | "f" | "F") => self.fit(event_loop),
-            Key::Character("1") => {
-                self.view.zoom_to(1.0);
-                self.redraw();
+            // Space: fit <-> 100%, Enter: fit
+            Key::Named(NamedKey::Space) => {
+                if self.view.is_fit() && (self.view.zoom - 1.0).abs() > 1e-9 {
+                    self.view.zoom_to(1.0);
+                    self.redraw();
+                } else {
+                    self.fit(event_loop);
+                }
             }
+            Key::Named(NamedKey::Enter) => self.fit(event_loop),
             _ => {}
         }
     }
@@ -269,22 +326,45 @@ impl App {
                     "Left" => Key::Named(NamedKey::ArrowLeft),
                     "F11" => Key::Named(NamedKey::F11),
                     "Escape" => Key::Named(NamedKey::Escape),
+                    "Space" => Key::Named(NamedKey::Space),
                     c => Key::Character(c.into()),
                 };
-                self.key(event_loop, key);
+                let code = match *name {
+                    "1" => Some(KeyCode::Digit1),
+                    "2" => Some(KeyCode::Digit2),
+                    _ => None,
+                };
+                self.key(event_loop, key, code);
             }
             ["info"] => {
                 let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
                 let r = self.view.image_rect();
-                println!("INFO zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
+                println!("INFO index={} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.files.index, self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
             }
             ["quit"] => event_loop.exit(),
-            _ => eprintln!("lumae: unknown test command: {cmd}"),
+            _ => eprintln!("lumaris: unknown test command: {cmd}"),
         }
     }
 }
 
 impl ApplicationHandler<UserEvent> for App {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+        if let Some(due) = self.next_slide {
+            if Instant::now() >= due {
+                self.next_slide = None;
+                let before = self.files.index;
+                self.step(event_loop, 1);
+                if self.files.index == before {
+                    self.stop_slideshow(); // last image and no looping (or a single image)
+                }
+            }
+        }
+        match self.next_slide {
+            Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
+            None => event_loop.set_control_flow(ControlFlow::Wait),
+        }
+    }
+
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         if self.window.is_some() {
             return;
@@ -304,12 +384,12 @@ impl ApplicationHandler<UserEvent> for App {
         #[cfg(target_os = "linux")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
-            attrs = attrs.with_name("lumae", "lumae");
+            attrs = attrs.with_name("lumaris", "lumaris");
         }
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
             Err(e) => {
-                eprintln!("lumae: cannot create the window: {e}");
+                eprintln!("lumaris: cannot create the window: {e}");
                 event_loop.exit();
                 return;
             }
@@ -317,7 +397,7 @@ impl ApplicationHandler<UserEvent> for App {
         let mut renderer = match gpu::Renderer::new(self.gpu.take().expect("gpu"), window.clone()) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!("lumae: {e}");
+                eprintln!("lumaris: {e}");
                 event_loop.exit();
                 return;
             }
@@ -327,8 +407,8 @@ impl ApplicationHandler<UserEvent> for App {
         }
         renderer.set_background(BACKGROUND_COLOR, BACKGROUND_OPACITY);
         if self.timing {
-            eprintln!("lumae: blur {}, KWin placement {}", self.blur.is_some(), self.kwin.is_some());
-            eprintln!("lumae: window and surface ready after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
+            eprintln!("lumaris: blur {}, KWin placement {}", self.blur.is_some(), self.kwin.is_some());
+            eprintln!("lumaris: window and surface ready after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
         }
         let s = window.inner_size();
         self.view.resize(s.width, s.height);
@@ -339,7 +419,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.cache.push((path.clone(), img.clone()));
                 self.show(event_loop, path, img);
             }
-            Err(e) => eprintln!("lumae: {}: {e}", path.display()),
+            Err(e) => eprintln!("lumaris: {}: {e}", path.display()),
         }
         self.prefetch();
     }
@@ -362,7 +442,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             Err(e) => {
-                eprintln!("lumae: {}: {e}", path.display());
+                eprintln!("lumaris: {}: {e}", path.display());
                 if current {
                     if let Some(r) = self.renderer.as_mut() {
                         r.clear_image();
@@ -396,7 +476,7 @@ impl ApplicationHandler<UserEvent> for App {
                 if !self.first_frame_done {
                     self.first_frame_done = true;
                     if self.timing {
-                        eprintln!("lumae: first frame after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
+                        eprintln!("lumaris: first frame after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
                     }
                 }
                 if animating {
@@ -429,8 +509,13 @@ impl ApplicationHandler<UserEvent> for App {
                 }
             }
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
-                self.key(event_loop, event.logical_key);
+                let code = match event.physical_key {
+                    PhysicalKey::Code(c) => Some(c),
+                    _ => None,
+                };
+                self.key(event_loop, event.logical_key, code);
             }
+            WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
             _ => {}
         }
     }
@@ -441,21 +526,21 @@ fn main() {
     // the placement script must be loaded before the window exists (it centres new windows)
     let kwin = std::thread::spawn(kwin::KWin::start);
     let Some(arg) = std::env::args_os().nth(1) else {
-        eprintln!("usage: lumae <image or folder>");
+        eprintln!("usage: lumaris <image or folder>");
         std::process::exit(2);
     };
     if arg == "--version" {
-        println!("Lumae {}", env!("CARGO_PKG_VERSION"));
+        println!("Lumaris {}", env!("CARGO_PKG_VERSION"));
         return;
     }
     let Some(files) = files::FileList::new(Path::new(&arg)) else {
-        eprintln!("lumae: no images found: {}", Path::new(&arg).display());
+        eprintln!("lumaris: no images found: {}", Path::new(&arg).display());
         std::process::exit(1);
     };
     let event_loop = match EventLoop::<UserEvent>::with_user_event().build() {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("lumae: no display: {e}");
+            eprintln!("lumaris: no display: {e}");
             std::process::exit(1);
         }
     };
@@ -463,7 +548,7 @@ fn main() {
     let _ = ctrlc::set_handler(move || {
         let _ = quit.send_event(UserEvent::Quit);
     });
-    if let Some(script) = std::env::var_os("LUMAE_AUTOTEST") {
+    if let Some(script) = std::env::var_os("LUMARIS_AUTOTEST") {
         let proxy = event_loop.create_proxy();
         let text = std::fs::read_to_string(script).unwrap_or_default();
         std::thread::spawn(move || {
@@ -482,17 +567,17 @@ fn main() {
     let gpu = match pollster::block_on(gpu::Gpu::new()) {
         Ok(g) => g,
         Err(e) => {
-            eprintln!("lumae: no usable GPU: {e}");
+            eprintln!("lumaris: no usable GPU: {e}");
             std::process::exit(1);
         }
     };
-    let timing = std::env::var_os("LUMAE_DEBUG_TIMING").is_some();
+    let timing = std::env::var_os("LUMARIS_DEBUG_TIMING").is_some();
     if timing {
-        eprintln!("lumae: GPU ready after {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+        eprintln!("lumaris: GPU ready after {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
     }
     let first = first.join().unwrap_or_else(|_| Err("decoder crashed".into()));
     if timing {
-        eprintln!("lumae: first image decoded after {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+        eprintln!("lumaris: first image decoded after {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
     }
     let threads = std::thread::available_parallelism().map(|n| n.get().clamp(1, 2)).unwrap_or(1);
     let mut app = App {
@@ -514,9 +599,13 @@ fn main() {
         timing,
         first_frame_done: false,
         followed_zoom: 0.0,
+        mods: ModifiersState::empty(),
+        slideshow: None,
+        next_slide: None,
+        loop_folder: true,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
-        eprintln!("lumae: {e}");
+        eprintln!("lumaris: {e}");
         std::process::exit(1);
     }
 }

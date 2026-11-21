@@ -1305,7 +1305,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "lumae"
+name = "lumaris"
 version = "0.1.0"
 dependencies = [
  "bytemuck",

@@ -1,10 +1,10 @@
 [package]
-name = "lumae"
+name = "lumaris"
 version = "0.1.0"
 edition = "2024"
 description = "Lean and fast image viewer for Linux"
 license = "GPL-2.0-or-later"
-repository = "https://github.com/0xRJDev/Lumae-Rust"
+repository = "https://github.com/0xRJDev/Lumaris"
 
 [dependencies]
 winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "rwh_06"] }

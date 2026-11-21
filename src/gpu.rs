@@ -41,7 +41,7 @@ impl Gpu {
             .map_err(|e| e.to_string())?;
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
-                label: Some("lumae"),
+                label: Some("lumaris"),
                 required_features: wgpu::Features::empty(),
                 required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
@@ -98,8 +98,8 @@ impl Renderer {
         // filter in the image's own (gamma) space, like other image viewers: no sRGB conversion
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
         // see-through window: needs a compositor that takes premultiplied alpha from Vulkan/GL
-        if std::env::var_os("LUMAE_DEBUG_TIMING").is_some() {
-            eprintln!("lumae: {:?} {:?}, alpha modes {:?}", gpu.adapter.get_info().backend, gpu.adapter.get_info().name, caps.alpha_modes);
+        if std::env::var_os("LUMARIS_DEBUG_TIMING").is_some() {
+            eprintln!("lumaris: {:?} {:?}, alpha modes {:?}", gpu.adapter.get_info().backend, gpu.adapter.get_info().name, caps.alpha_modes);
         }
         let transparent = caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied);
         let alpha_mode = if transparent { wgpu::CompositeAlphaMode::PreMultiplied } else { caps.alpha_modes[0] };
