@@ -13,6 +13,24 @@ pub struct InfoBox {
     scale: f32,
     /// centred in the window (help) instead of the top left corner (image info)
     centered: bool,
+    /// red, green, blue histograms (256 levels)
+    histogram: Option<Box<[[u32; 256]; 3]>>,
+}
+
+/// Histogram of the image (every pixel up to ~1 MP, sampled above)
+fn histogram(img: &Decoded) -> Box<[[u32; 256]; 3]> {
+    let mut h = Box::new([[0u32; 256]; 3]);
+    let pixels = img.rgba.len() / 4;
+    let step = (pixels / 1_000_000).max(1);
+    for px in img.rgba.chunks_exact(4).step_by(step) {
+        if px[3] == 0 {
+            continue; // transparent
+        }
+        h[0][px[0] as usize] += 1;
+        h[1][px[1] as usize] += 1;
+        h[2][px[2] as usize] += 1;
+    }
+    h
 }
 
 fn human_size(bytes: u64) -> String {
@@ -94,12 +112,12 @@ impl InfoBox {
         }
         lines.push(("Zoom".into(), format!("{:.0}%", zoom * 100.0)));
         exif_lines(path, &mut lines);
-        InfoBox { lines, pixmap: None, scale: scale as f32, centered: false }
+        InfoBox { lines, pixmap: None, scale: scale as f32, centered: false, histogram: img.map(histogram) }
     }
 
     /// A box with the given lines (label, text), centred in the window
     pub fn with_lines(lines: Vec<(String, String)>, scale: f64) -> InfoBox {
-        InfoBox { lines, pixmap: None, scale: scale as f32, centered: true }
+        InfoBox { lines, pixmap: None, scale: scale as f32, centered: true, histogram: None }
     }
 
     /// The box as a premultiplied RGBA image (pixels, width, height, x, y)
@@ -128,8 +146,9 @@ impl InfoBox {
         let pad = u(12.0);
         let label_w = self.lines.iter().map(|(l, _)| text_width(font, l, px)).fold(0.0, f32::max);
         let value_w = self.lines.iter().map(|(_, v)| text_width(font, v, px)).fold(0.0, f32::max).min(u(520.0));
-        let w = (pad * 2.0 + label_w + u(16.0) + value_w).ceil();
-        let h = (pad * 2.0 + line_h * self.lines.len() as f32).ceil();
+        let graph_h = if self.histogram.is_some() { u(90.0) } else { 0.0 };
+        let w = (pad * 2.0 + label_w + u(16.0) + value_w).max(u(256.0) + pad * 2.0).ceil();
+        let h = (pad * 2.0 + line_h * self.lines.len() as f32 + graph_h).ceil();
         let mut pm = Pixmap::new(w as u32, h as u32)?;
         let mut paint = Paint { anti_alias: true, ..Default::default() };
         if let Some(path) = rounded_rect(0.5, 0.5, w - 1.0, h - 1.0, u(6.0)) {
@@ -151,6 +170,36 @@ impl InfoBox {
                 v.push('…');
             }
             draw_text(&mut pm, font, &v, px, pad + label_w + u(16.0), baseline, st.text, 1.0);
+        }
+        if let Some(hist) = &self.histogram {
+            // histogram: the three channels as filled curves, added up
+            let (gx, gy, gw, gh) = (pad, pad + line_h * self.lines.len() as f32 + u(8.0), w - pad * 2.0, graph_h - u(12.0));
+            paint.set_color(color(st.text, 0.06));
+            if let Some(r) = resvg::tiny_skia::Rect::from_xywh(gx, gy, gw, gh) {
+                pm.fill_rect(r, &paint, Transform::identity(), None);
+            }
+            // scale: ignore the extreme levels (pure black/white areas would flatten the rest)
+            let mut peak = 1u32;
+            for ch in hist.iter() {
+                for v in &ch[1..255] {
+                    peak = peak.max(*v);
+                }
+            }
+            for (k, rgb) in [[255u8, 70, 70], [70, 220, 70], [80, 120, 255]].iter().enumerate() {
+                let mut pb = resvg::tiny_skia::PathBuilder::new();
+                pb.move_to(gx, gy + gh);
+                for (level, v) in hist[k].iter().enumerate() {
+                    let x = gx + gw * level as f32 / 255.0;
+                    let y = gy + gh - gh * ((*v as f32 / peak as f32).min(1.0)).sqrt();
+                    pb.line_to(x, y);
+                }
+                pb.line_to(gx + gw, gy + gh);
+                pb.close();
+                if let Some(path) = pb.finish() {
+                    paint.set_color(color(*rgb, 0.45));
+                    pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+                }
+            }
         }
         Some(pm)
     }

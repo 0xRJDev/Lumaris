@@ -13,6 +13,7 @@ mod instance;
 mod keys;
 mod kwin;
 mod menu;
+mod panel;
 mod portal;
 mod raw;
 mod settings;
@@ -108,6 +109,10 @@ struct App {
     last_click: Option<(Instant, (f64, f64))>,
     user_commands: Vec<commands::UserCommand>,
     navigation_panel: bool,
+    nav: panel::Panel,
+    map_drag: bool,
+    /// slideshow fade to a new image: when it started
+    fade_start: Option<Instant>,
     _instance: Option<instance::Instance>,
 }
 
@@ -201,7 +206,16 @@ impl App {
 
     fn show(&mut self, event_loop: &ActiveEventLoop, path: PathBuf, img: Arc<Decoded>) {
         let (Some(window), Some(renderer)) = (self.window.clone(), self.renderer.as_mut()) else { return };
-        renderer.set_image(&img);
+        let fade = self.slideshow.is_some() && settings::current().choice("Transition") == 1 && self.current.is_some();
+        if fade {
+            renderer.set_image_fading(&img);
+            self.fade_start = Some(Instant::now());
+        } else {
+            renderer.set_image(&img);
+            renderer.end_fade();
+            self.fade_start = None;
+        }
+        self.nav.clear_image();
         window.set_title(&Self::title_for(&path, ""));
         let keep = settings::current().bool("KeepZoom") && self.shown.is_some() && !self.view.is_fit();
         self.shown = Some(path);
@@ -241,6 +255,7 @@ impl App {
             self.orient = new;
         }
         let rot = self.orient & 3;
+        self.nav.clear_image();
         if let Some(img) = self.current.clone() {
             let (w, h) = if rot % 2 == 1 { (img.height, img.width) } else { (img.width, img.height) };
             self.view.set_image(w, h);
@@ -636,6 +651,7 @@ impl App {
         let s = settings::current().clone();
         self.view.configure(s.choice("FitMode") == 1, s.bool("SmoothZoom"));
         self.loop_folder = s.bool("LoopFolder");
+        self.navigation_panel = s.bool("NavigationPanel");
         if let (Some(r), Some(w)) = (self.renderer.as_mut(), self.window.clone()) {
             r.set_pixel_art(s.bool("PixelArt"), s.number("PixelArtMaxSize") as u32);
             let mode = s.choice("BackgroundMode");
@@ -767,11 +783,23 @@ impl App {
     /// Shows the current panels: image info, settings window, menu (on top)
     fn sync_overlays(&mut self) {
         let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
-        let App { renderer, menu, settings_panel, info, help, .. } = self;
+        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+        self.nav.configure(size, scale);
+        self.nav.set_view(self.view.image_rect());
+        if self.navigation_panel && self.nav.wants_image() {
+            if let Some(img) = self.current.clone() {
+                self.nav.set_image(&img.rgba, img.pixel_width, img.pixel_height, self.orient);
+            }
+        }
+        let show_nav = self.navigation_panel && self.settings_panel.is_none();
+        let App { renderer, menu, settings_panel, info, help, nav, .. } = self;
         if let Some(r) = renderer.as_mut() {
             let mut layers = Vec::new();
             if let Some(i) = info.as_mut() {
                 layers.extend(i.layer(size));
+            }
+            if show_nav {
+                layers.extend(nav.layers());
             }
             if let Some(h) = help.as_mut() {
                 layers.extend(h.layer(size));
@@ -1003,7 +1031,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.next_animation_frame();
-        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due)].into_iter().flatten().min();
+        if self.nav.expire() {
+            self.sync_overlays();
+        }
+        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due), self.nav.deadline()].into_iter().flatten().min();
         match next {
             Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -1141,8 +1172,25 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let animating = self.view.step(Instant::now());
                 self.follow_zoom(event_loop);
+                // zoom map follows zoom and panning
+                if self.navigation_panel {
+                    let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
+                    self.nav.configure(size, self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0));
+                    if self.nav.set_view(self.view.image_rect()) {
+                        self.sync_overlays();
+                    }
+                }
+                const FADE: f32 = 0.4;
+                let fade = self.fade_start.map(|t| (t.elapsed().as_secs_f32() / FADE).min(1.0));
                 if let Some(r) = self.renderer.as_mut() {
-                    r.render(self.view.image_rect(), self.view.zoom, self.orient);
+                    r.render(self.view.image_rect(), self.view.zoom, self.orient, fade.filter(|f| *f < 1.0));
+                    if fade.is_some_and(|f| f >= 1.0) {
+                        r.end_fade();
+                        self.fade_start = None;
+                    }
+                }
+                if self.fade_start.is_some() {
+                    self.redraw();
                 }
                 if !self.first_frame_done {
                     self.first_frame_done = true;
@@ -1177,6 +1225,17 @@ impl ApplicationHandler<UserEvent> for App {
                     }
                     return;
                 }
+                if self.map_drag {
+                    if let Some((fx, fy)) = self.nav.map_position((x, y)) {
+                        self.view.center_on(fx, fy);
+                        self.redraw();
+                    }
+                    self.cursor = (x, y);
+                    return;
+                }
+                if self.navigation_panel && self.nav.poke((x, y)) {
+                    self.sync_overlays();
+                }
                 if let Some((lx, ly)) = self.drag {
                     self.view.pan(x - lx, y - ly);
                     self.drag = Some((x, y));
@@ -1198,6 +1257,17 @@ impl ApplicationHandler<UserEvent> for App {
                     self.drag = None;
                     self.open_menu(self.cursor);
                 }
+                (MouseButton::Left, ElementState::Pressed) if self.navigation_panel && self.nav.click(self.cursor).is_some() => {
+                    match self.nav.click(self.cursor) {
+                        Some(Ok(cmd)) => self.command(event_loop, cmd),
+                        Some(Err((fx, fy))) => {
+                            self.map_drag = true;
+                            self.view.center_on(fx, fy);
+                            self.redraw();
+                        }
+                        None => {}
+                    }
+                }
                 (MouseButton::Left, ElementState::Pressed) => {
                     // double click: full screen
                     let now = Instant::now();
@@ -1212,7 +1282,10 @@ impl ApplicationHandler<UserEvent> for App {
                         self.drag = Some(self.cursor);
                     }
                 }
-                (MouseButton::Left, ElementState::Released) => self.drag = None,
+                (MouseButton::Left, ElementState::Released) => {
+                    self.drag = None;
+                    self.map_drag = false;
+                }
                 (MouseButton::Back, ElementState::Pressed) => self.step(event_loop, -1),
                 (MouseButton::Forward, ElementState::Pressed) => self.step(event_loop, 1),
                 _ => {}
@@ -1362,6 +1435,9 @@ fn main() {
         last_click: None,
         user_commands: commands::load(),
         navigation_panel: settings::current().bool("NavigationPanel"),
+        nav: panel::Panel::new(),
+        map_drag: false,
+        fade_start: None,
         _instance: single,
     };
     if let Err(e) = event_loop.run_app(&mut app) {

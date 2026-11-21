@@ -108,6 +108,14 @@ impl View {
         self.zoom_at(zoom / self.target, at);
     }
 
+    /// Shows the image point at fractions (fx, fy) in the window centre (zoom map)
+    pub fn center_on(&mut self, fx: f64, fy: f64) {
+        let (w, h) = (self.img.0 * self.zoom, self.img.1 * self.zoom);
+        let c = (self.win.0 / 2.0 + (0.5 - fx) * w, self.win.1 / 2.0 + (0.5 - fy) * h);
+        self.set_center(c);
+        self.fit_mode = false;
+    }
+
     pub fn pan(&mut self, dx: f64, dy: f64) {
         let c = self.center_at(self.zoom);
         self.set_center((c.0 + dx, c.1 + dy));

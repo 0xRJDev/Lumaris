@@ -84,6 +84,7 @@ struct Overlay {
 
 struct ImageTexture {
     bind_group: wgpu::BindGroup,
+    view: wgpu::TextureView,
     texture: wgpu::Texture,
     mips: u32,
     /// texture size
@@ -108,6 +109,10 @@ pub struct Renderer {
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     image: Option<ImageTexture>,
+    /// the previous image while fading to the new one: texture, position, zoom, orientation
+    previous: Option<(ImageTexture, [f32; 4], f64, u32)>,
+    previous_uniforms: wgpu::Buffer,
+    last_draw: ([f32; 4], f64, u32),
     overlays: Vec<Overlay>,
     background: wgpu::Color,
     transparent: bool,
@@ -202,6 +207,12 @@ impl Renderer {
                 ..Default::default()
             })
         };
+        let previous_uniforms = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("previous uniforms"),
+            size: std::mem::size_of::<Uniforms>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
         let linear = sampler(wgpu::FilterMode::Linear);
         let nearest = sampler(wgpu::FilterMode::Nearest);
 
@@ -218,6 +229,9 @@ impl Renderer {
             linear,
             nearest,
             image: None,
+            previous: None,
+            previous_uniforms,
+            last_draw: ([0.0; 4], 1.0, 0),
             overlays: Vec::new(),
             background: wgpu::Color::BLACK,
             transparent,
@@ -260,6 +274,29 @@ impl Renderer {
     /// Uploads the image and builds its mipmaps on the GPU.
     pub fn set_image(&mut self, img: &Decoded) {
         self.upload(img.pixel_width, img.pixel_height, &img.rgba, (img.width, img.height), img.vector.is_some());
+    }
+
+    /// Like set_image, but keeps the current image for a fade (render with `fade`).
+    pub fn set_image_fading(&mut self, img: &Decoded) {
+        if let Some(old) = self.image.take() {
+            let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("previous"),
+                layout: &self.layout,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: self.previous_uniforms.as_entire_binding() },
+                    wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(&old.view) },
+                    wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(&self.linear) },
+                    wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
+                ],
+            });
+            let (rect, zoom, orient) = self.last_draw;
+            self.previous = Some((ImageTexture { bind_group, ..old }, rect, zoom, orient));
+        }
+        self.set_image(img);
+    }
+
+    pub fn end_fade(&mut self) {
+        self.previous = None;
     }
 
     /// Next frame of an animation (same size as the current image).
@@ -324,7 +361,7 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
             ],
         });
-        self.image = Some(ImageTexture { bind_group, texture, mips, tex_w: w, tex_h: h, width: logical.0, height: logical.1, vector });
+        self.image = Some(ImageTexture { bind_group, view, texture, mips, tex_w: w, tex_h: h, width: logical.0, height: logical.1, vector });
     }
 
     /// Re-rendered vector image (same logical size, other pixel size).
@@ -421,7 +458,9 @@ impl Renderer {
     }
 
     /// Draws one frame. `rect`: image rectangle in window pixels, `zoom`: display zoom.
-    pub fn render(&mut self, rect: [f32; 4], zoom: f64, orient: u32) {
+    /// `fade`: progress of a fade from the previous image (0..1), None: no fade
+    pub fn render(&mut self, rect: [f32; 4], zoom: f64, orient: u32, fade: Option<f32>) {
+        self.last_draw = (rect, zoom, orient);
         let frame = match self.surface.get_current_texture() {
             Ok(f) => f,
             Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
@@ -443,30 +482,15 @@ impl Renderer {
                 })],
                 ..Default::default()
             });
+            if let (Some((prev, prect, pzoom, porient)), Some(_)) = (&self.previous, fade) {
+                let u = self.uniforms_for(prev, *prect, *pzoom, *porient, 1.0);
+                self.gpu.queue.write_buffer(&self.previous_uniforms, 0, bytemuck::bytes_of(&u));
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &prev.bind_group, &[]);
+                pass.draw(0..6, 0..1);
+            }
             if let Some(img) = &self.image {
-                let pixel_art = self.pixel_art.0 && !img.vector && img.width.max(img.height) <= self.pixel_art.1;
-                // zoom relative to the texture pixels
-                let zoom = zoom * img.width as f64 / img.tex_w as f64;
-                let aligned = rect[0].fract() == 0.0 && rect[1].fract() == 0.0;
-                let (mode, lod) = if (zoom - 1.0).abs() < 1e-6 && aligned {
-                    (3, 0.0)
-                } else if zoom > 1.0 {
-                    (if pixel_art { 2 } else { 1 }, 0.0)
-                } else {
-                    (0, ((-zoom.log2()) - 0.25).max(0.0) as f32)
-                };
-                let u = Uniforms {
-                    rect,
-                    viewport: [self.config.width as f32, self.config.height as f32],
-                    tex_size: [img.tex_w as f32, img.tex_h as f32],
-                    zoom: zoom as f32,
-                    mode,
-                    lod,
-                    checker: if self.checkerboard { (8.0 * self.window.scale_factor()).round() as f32 } else { 0.0 },
-                    orient,
-                    alpha: 1.0,
-                    pad: [0.0; 2],
-                };
+                let u = self.uniforms_for(img, rect, zoom, orient, fade.unwrap_or(1.0));
                 self.gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);
                 pass.set_bind_group(0, &img.bind_group, &[]);
@@ -494,6 +518,34 @@ impl Renderer {
         self.gpu.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
         frame.present();
+    }
+}
+
+impl Renderer {
+    fn uniforms_for(&self, img: &ImageTexture, rect: [f32; 4], zoom: f64, orient: u32, alpha: f32) -> Uniforms {
+        let pixel_art = self.pixel_art.0 && !img.vector && img.width.max(img.height) <= self.pixel_art.1;
+        // zoom relative to the texture pixels
+        let zoom = zoom * img.width as f64 / img.tex_w as f64;
+        let aligned = rect[0].fract() == 0.0 && rect[1].fract() == 0.0;
+        let (mode, lod) = if (zoom - 1.0).abs() < 1e-6 && aligned {
+            (3, 0.0)
+        } else if zoom > 1.0 {
+            (if pixel_art { 2 } else { 1 }, 0.0)
+        } else {
+            (0, ((-zoom.log2()) - 0.25).max(0.0) as f32)
+        };
+        Uniforms {
+            rect,
+            viewport: [self.config.width as f32, self.config.height as f32],
+            tex_size: [img.tex_w as f32, img.tex_h as f32],
+            zoom: zoom as f32,
+            mode,
+            lod,
+            checker: if self.checkerboard { (8.0 * self.window.scale_factor()).round() as f32 } else { 0.0 },
+            orient,
+            alpha,
+            pad: [0.0; 2],
+        }
     }
 }
 
