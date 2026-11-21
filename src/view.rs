@@ -19,16 +19,34 @@ pub struct View {
     point: (f64, f64),
     last_tick: Option<Instant>,
     fit_mode: bool,
+    /// fit also enlarges small images
+    enlarge: bool,
+    smooth: bool,
 }
 
 impl View {
     pub fn new() -> View {
-        View { img: (1.0, 1.0), win: (1.0, 1.0), zoom: 1.0, target: 1.0, anchor: (0.0, 0.0), point: (0.0, 0.0), last_tick: None, fit_mode: true }
+        View { img: (1.0, 1.0), win: (1.0, 1.0), zoom: 1.0, target: 1.0, anchor: (0.0, 0.0), point: (0.0, 0.0), last_tick: None, fit_mode: true, enlarge: false, smooth: true }
     }
 
-    /// Zoom that shows the whole image (never enlarges).
+    pub fn configure(&mut self, enlarge: bool, smooth: bool) {
+        self.enlarge = enlarge;
+        self.smooth = smooth;
+    }
+
+    /// Zoom that shows the whole image (enlarges small images only if configured).
     pub fn fit_zoom(&self) -> f64 {
-        (self.win.0 / self.img.0).min(self.win.1 / self.img.1).min(1.0)
+        let z = (self.win.0 / self.img.0).min(self.win.1 / self.img.1);
+        if self.enlarge { z } else { z.min(1.0) }
+    }
+
+    /// Another image at the same zoom, centred (keep zoom on navigation).
+    pub fn replace_image(&mut self, w: u32, h: u32) {
+        self.img = (w.max(1) as f64, h.max(1) as f64);
+        self.anchor = (self.win.0 / 2.0, self.win.1 / 2.0);
+        self.point = (0.0, 0.0);
+        self.target = self.zoom;
+        self.last_tick = None;
     }
 
     pub fn set_image(&mut self, w: u32, h: u32) {
@@ -74,7 +92,12 @@ impl View {
         self.point = ((at.0 - c.0) / self.zoom, (at.1 - c.1) / self.zoom);
         self.target = (self.target * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         self.fit_mode = false;
-        if self.last_tick.is_none() {
+        if !self.smooth {
+            self.zoom = self.target;
+            let c = self.center_at(self.zoom);
+            self.set_center(c);
+            self.last_tick = None;
+        } else if self.last_tick.is_none() {
             self.last_tick = Some(Instant::now());
         }
     }

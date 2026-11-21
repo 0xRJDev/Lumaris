@@ -58,7 +58,10 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
         "svg" | "svgz" => decode_svg(path),
         "heic" | "heif" | "hif" => decode_heif(path),
         "jxl" => decode_jxl(path),
-        e if RAW_EXTENSIONS.contains(&e) => crate::raw::decode(path).map(Decoded::raster),
+        e if RAW_EXTENSIONS.contains(&e) => {
+            let develop = crate::settings::current().choice("RawMode") == 1;
+            crate::raw::decode(path, develop).map(Decoded::raster)
+        }
         _ => decode_image(path),
     }
 }
@@ -92,9 +95,33 @@ fn decode_image(path: &Path) -> Result<Decoded, String> {
     }
     let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
     let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = if crate::settings::current().bool("ColourProfiles") { decoder.icc_profile().ok().flatten() } else { None };
     let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
     img.apply_orientation(orientation);
-    Ok(Decoded::raster(img))
+    let mut d = Decoded::raster(img);
+    if let Some(icc) = icc {
+        to_srgb(&icc, &mut d.rgba);
+    }
+    Ok(d)
+}
+
+/// Converts RGBA8 pixels from the embedded colour profile to sRGB (Little CMS).
+/// sRGB profiles and profiles of other colour spaces (e.g. CMYK) are left alone.
+fn to_srgb(icc: &[u8], rgba: &mut [u8]) {
+    let Ok(profile) = lcms2::Profile::new_icc(icc) else { return };
+    if profile.color_space() != lcms2::ColorSpaceSignature::RgbData {
+        return;
+    }
+    let name = profile.info(lcms2::InfoType::Description, lcms2::Locale::none()).unwrap_or_default();
+    if name.to_ascii_lowercase().contains("srgb") {
+        return;
+    }
+    let srgb = lcms2::Profile::new_srgb();
+    let Ok(t) = lcms2::Transform::<[u8; 4], [u8; 4]>::new(&profile, lcms2::PixelFormat::RGBA_8, &srgb, lcms2::PixelFormat::RGBA_8, lcms2::Intent::Perceptual)
+    else {
+        return;
+    };
+    t.transform_in_place(bytemuck::cast_slice_mut(rgba));
 }
 
 fn animation<'a>(dec: impl AnimationDecoder<'a>) -> Result<Decoded, String> {

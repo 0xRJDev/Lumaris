@@ -72,7 +72,8 @@ impl Image {
     }
 }
 
-pub fn decode(path: &Path) -> Result<DynamicImage, String> {
+/// `develop`: develop the RAW data even when there is an embedded preview.
+pub fn decode(path: &Path, develop: bool) -> Result<DynamicImage, String> {
     let name = CString::new(path.as_os_str().as_encoded_bytes()).map_err(|e| e.to_string())?;
     let lr = unsafe { libraw_init(0) };
     if lr.is_null() {
@@ -84,7 +85,7 @@ pub fn decode(path: &Path) -> Result<DynamicImage, String> {
     }
     let mut err = 0;
     // embedded preview
-    if unsafe { libraw_unpack_thumb(lr.0) } == 0 {
+    if !develop && unsafe { libraw_unpack_thumb(lr.0) } == 0 {
         let p = unsafe { libraw_dcraw_make_mem_thumb(lr.0, &mut err) };
         if !p.is_null() {
             let img = Image(p);

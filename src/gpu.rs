@@ -33,7 +33,11 @@ impl Gpu {
         let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
+                power_preference: if crate::settings::current().bool("PreferDedicatedGpu") {
+                    wgpu::PowerPreference::HighPerformance
+                } else {
+                    wgpu::PowerPreference::LowPower
+                },
                 force_fallback_adapter: false,
                 compatible_surface: None,
             })
@@ -62,7 +66,8 @@ struct Uniforms {
     zoom: f32,
     mode: u32,
     lod: f32,
-    pad: f32,
+    /// checkerboard square size behind transparent parts (0 = none)
+    checker: f32,
 }
 
 /// An image drawn over the main image at a fixed position (menus)
@@ -102,6 +107,8 @@ pub struct Renderer {
     overlays: Vec<Overlay>,
     background: wgpu::Color,
     transparent: bool,
+    pixel_art: (bool, u32),
+    checkerboard: bool,
 }
 
 impl Renderer {
@@ -210,7 +217,19 @@ impl Renderer {
             overlays: Vec::new(),
             background: wgpu::Color::BLACK,
             transparent,
+            pixel_art: (true, PIXEL_ART_MAX),
+            checkerboard: false,
         })
+    }
+
+    /// Sharp square pixels when enlarging images up to `max` pixels wide and high
+    pub fn set_pixel_art(&mut self, enabled: bool, max: u32) {
+        self.pixel_art = (enabled, max);
+    }
+
+    /// Checkerboard behind transparent image parts
+    pub fn set_checkerboard(&mut self, on: bool) {
+        self.checkerboard = on;
     }
 
     /// true when the window can be see-through
@@ -421,7 +440,7 @@ impl Renderer {
                 ..Default::default()
             });
             if let Some(img) = &self.image {
-                let pixel_art = !img.vector && img.width.max(img.height) <= PIXEL_ART_MAX;
+                let pixel_art = self.pixel_art.0 && !img.vector && img.width.max(img.height) <= self.pixel_art.1;
                 // zoom relative to the texture pixels
                 let zoom = zoom * img.width as f64 / img.tex_w as f64;
                 let aligned = rect[0].fract() == 0.0 && rect[1].fract() == 0.0;
@@ -439,7 +458,7 @@ impl Renderer {
                     zoom: zoom as f32,
                     mode,
                     lod,
-                    pad: 0.0,
+                    checker: if self.checkerboard { (8.0 * self.window.scale_factor()).round() as f32 } else { 0.0 },
                 };
                 self.gpu.queue.write_buffer(&self.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);
@@ -454,7 +473,7 @@ impl Renderer {
                     zoom: 1.0,
                     mode: 4,
                     lod: 0.0,
-                    pad: 0.0,
+                    checker: 0.0,
                 };
                 self.gpu.queue.write_buffer(&o.uniforms, 0, bytemuck::bytes_of(&u));
                 pass.set_pipeline(&self.pipeline);

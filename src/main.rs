@@ -6,9 +6,13 @@ mod decode;
 mod desktop;
 mod files;
 mod gpu;
+mod info;
 mod kwin;
 mod menu;
 mod raw;
+mod settings;
+mod settings_ui;
+mod ui;
 mod view;
 
 use std::collections::HashSet;
@@ -24,20 +28,16 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, ModifiersState, NamedKey, PhysicalKey};
 use winit::window::{Fullscreen, Window, WindowId};
 
-/// The window is fitted to the image within this part of the screen.
-const MAX_WINDOW_PERCENT: f64 = 80.0;
-/// Widest window aspect ratio, unless the image itself is wider.
-const MAX_WINDOW_ASPECT: f64 = 16.0 / 9.0;
-/// Zoom factor of one mouse wheel step.
-const WHEEL_STEP: f64 = 1.2;
 /// Smallest window (the image is centred in it).
 const MIN_WINDOW: (u32, u32) = (200, 150);
-/// Background behind and around the image, and how much it covers the (blurred) desktop:
-/// 0 = see-through, 1 = solid.
-const BACKGROUND_COLOR: [f64; 3] = [0.0, 0.0, 0.0];
-const BACKGROUND_OPACITY: f64 = 0.0;
-/// Decoded images kept around the current one (in each direction).
-const CACHE_RADIUS: usize = 2;
+
+fn wheel_step() -> f64 {
+    1.0 + settings::current().number("ZoomStep") / 100.0
+}
+
+fn max_aspect() -> f64 {
+    settings::aspect_ratio(settings::current().choice("MaxWindowAspect"))
+}
 
 pub enum UserEvent {
     Decoded(PathBuf, Result<Arc<Decoded>, String>),
@@ -89,14 +89,20 @@ struct App {
     current: Option<Arc<Decoded>>,
     menu: Option<menu::Menu>,
     menu_apps: Vec<apps::DesktopApp>,
+    settings_panel: Option<settings_ui::SettingsPanel>,
+    /// window size before the settings window enlarged it
+    size_before_settings: Option<PhysicalSize<u32>>,
+    info: Option<info::InfoBox>,
+    info_zoom: f64,
 }
 
 impl App {
     fn window_size_for(&self, w: u32, h: u32, screen: PhysicalSize<u32>) -> PhysicalSize<u32> {
         let (iw, ih) = (w.max(1) as f64, h.max(1) as f64);
-        let mut aw = screen.width as f64 * MAX_WINDOW_PERCENT / 100.0;
-        let ah = screen.height as f64 * MAX_WINDOW_PERCENT / 100.0;
-        aw = aw.min(ah * MAX_WINDOW_ASPECT.max(iw / ih));
+        let percent = settings::current().number("MaxWindowSize");
+        let mut aw = screen.width as f64 * percent / 100.0;
+        let ah = screen.height as f64 * percent / 100.0;
+        aw = aw.min(ah * max_aspect().max(iw / ih));
         let z = (aw / iw).min(ah / ih).min(1.0);
         PhysicalSize::new(((iw * z).round() as u32).max(MIN_WINDOW.0), ((ih * z).round() as u32).max(MIN_WINDOW.1))
     }
@@ -152,12 +158,12 @@ impl App {
             return;
         }
         self.followed_zoom = z;
-        if self.windowed().is_none() {
+        if self.windowed().is_none() || !settings::current().bool("WindowFollowsZoom") {
             return;
         }
         let (iw, ih) = self.view.image_size();
         let (mut mw, mh) = self.max_client_size(event_loop);
-        mw = mw.min(mh * MAX_WINDOW_ASPECT.max(iw / ih));
+        mw = mw.min(mh * max_aspect().max(iw / ih));
         let w = ((iw * z).round().min(mw.floor()) as u32).max(MIN_WINDOW.0);
         let h = ((ih * z).round().min(mh.floor()) as u32).max(MIN_WINDOW.1);
         self.apply_window_size(PhysicalSize::new(w, h));
@@ -182,14 +188,96 @@ impl App {
         let (Some(window), Some(renderer)) = (self.window.clone(), self.renderer.as_mut()) else { return };
         renderer.set_image(&img);
         window.set_title(&Self::title_for(&path, ""));
-        self.view.set_image(img.width, img.height);
+        let keep = settings::current().bool("KeepZoom") && self.shown.is_some() && !self.view.is_fit();
         self.shown = Some(path);
-        self.fit(event_loop);
+        if keep {
+            self.view.replace_image(img.width, img.height);
+            self.redraw();
+        } else {
+            self.view.set_image(img.width, img.height);
+            self.fit(event_loop);
+        }
         self.next_slide = self.slideshow.map(|d| Instant::now() + d);
-        self.animation = (img.frames.len() > 1).then(|| Animation { due: Instant::now() + img.frames[0].delay, image: img.clone(), frame: 0 });
+        let play = settings::current().bool("PlayAnimations");
+        self.animation = (play && img.frames.len() > 1).then(|| Animation { due: Instant::now() + img.frames[0].delay, image: img.clone(), frame: 0 });
         self.vector_request += 1;
         self.vector_scale = img.pixel_width as f64 / img.width as f64;
         self.current = Some(img);
+        self.refresh_info();
+    }
+
+    fn toggle_info(&mut self) {
+        if self.info.take().is_none() {
+            self.info_zoom = -1.0;
+            self.info = Some(info::InfoBox::new(Path::new(""), None, (0, 0), 1.0, 1.0)); // replaced right away
+            self.refresh_info();
+        } else {
+            self.sync_overlays();
+        }
+    }
+
+    /// Rebuilds the image info box (new image or zoom)
+    fn refresh_info(&mut self) {
+        if self.info.is_none() {
+            return;
+        }
+        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+        self.info_zoom = self.view.zoom;
+        self.info = Some(info::InfoBox::new(
+            self.files.current(),
+            self.current.as_deref(),
+            (self.files.index, self.files.files.len()),
+            self.view.zoom,
+            scale,
+        ));
+        self.sync_overlays();
+    }
+
+    fn open_settings(&mut self) {
+        self.close_menu();
+        let Some(window) = self.window.clone() else { return };
+        let scale = window.scale_factor();
+        let (ww, wh) = settings_ui::SettingsPanel::wanted_size(scale);
+        let s = window.inner_size();
+        if self.windowed().is_some() && (s.width < ww || s.height < wh) {
+            self.size_before_settings = Some(s);
+            self.apply_window_size(PhysicalSize::new(s.width.max(ww), s.height.max(wh)));
+        }
+        let s = window.inner_size();
+        self.settings_panel = Some(settings_ui::SettingsPanel::new(settings::current().clone(), (s.width, s.height), scale));
+        self.sync_overlays();
+    }
+
+    fn close_settings(&mut self) {
+        if self.settings_panel.take().is_some() {
+            if let Some(size) = self.size_before_settings.take() {
+                if self.windowed().is_some() {
+                    self.apply_window_size(size);
+                }
+            }
+            self.sync_overlays();
+        }
+    }
+
+    fn settings_click(&mut self, at: (f64, f64)) {
+        let Some(p) = self.settings_panel.as_mut() else { return };
+        match p.click(at) {
+            settings_ui::Outcome::Nothing => {}
+            settings_ui::Outcome::Redraw => self.sync_overlays(),
+            settings_ui::Outcome::Changed(s) => {
+                self.change_settings(s);
+                self.sync_overlays();
+            }
+            settings_ui::Outcome::Close => self.close_settings(),
+            settings_ui::Outcome::EditFile => {
+                let path = settings::Settings::path();
+                if !path.exists() {
+                    let _ = settings::current().save();
+                }
+                apps::spawn_detached(std::process::Command::new("xdg-open").arg(path));
+                self.close_settings();
+            }
+        }
     }
 
     /// Vector images: render again at the displayed size once the zoom has settled.
@@ -250,7 +338,9 @@ impl App {
 
     fn prefetch(&mut self) {
         let (i, n) = (self.files.index, self.files.files.len());
-        for k in [self.neighbour(1), self.neighbour(-1)].into_iter().flatten() {
+        let ahead = settings::current().number("Prefetch") as isize;
+        let wanted: Vec<usize> = (1..=ahead).flat_map(|d| [self.neighbour(d), self.neighbour(-d)]).flatten().collect();
+        for k in wanted {
             let p = self.files.files[k].clone();
             if !self.cache.iter().any(|(c, _)| *c == p) {
                 self.request(p);
@@ -261,7 +351,7 @@ impl App {
         self.cache.retain(|(p, _)| {
             files.iter().position(|f| f == p).is_some_and(|k| {
                 let d = k.abs_diff(i);
-                d.min(n - d) <= CACHE_RADIUS
+                d.min(n - d) <= ahead as usize + 1
             })
         });
     }
@@ -284,6 +374,9 @@ impl App {
     }
 
     fn start_slideshow(&mut self, interval: Duration) {
+        if settings::current().bool("SlideshowFullScreen") && self.window.as_ref().is_some_and(|w| w.fullscreen().is_none()) {
+            self.toggle_fullscreen();
+        }
         self.slideshow = Some(interval);
         self.next_slide = Some(Instant::now() + interval);
     }
@@ -309,6 +402,64 @@ impl App {
         self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width as f64 / 2.0, s.height as f64 / 2.0)).unwrap_or((0.0, 0.0))
     }
 
+    /// Applies the settings that work without a restart. `old`: the previous settings.
+    fn apply_settings(&mut self, old: Option<&settings::Settings>) {
+        let s = settings::current().clone();
+        self.view.configure(s.choice("FitMode") == 1, s.bool("SmoothZoom"));
+        self.loop_folder = s.bool("LoopFolder");
+        if let (Some(r), Some(w)) = (self.renderer.as_mut(), self.window.clone()) {
+            r.set_pixel_art(s.bool("PixelArt"), s.number("PixelArtMaxSize") as u32);
+            let mode = s.choice("BackgroundMode");
+            let colour = settings::colour(s.choice("BackgroundColour"));
+            let opacity = if mode <= 1 { s.number("BackgroundOpacity") / 100.0 } else { 1.0 };
+            r.set_background(colour, opacity);
+            r.set_checkerboard(mode == 3);
+            let blur = mode == 0 && r.transparent();
+            if blur && self.blur.is_none() {
+                self.blur = blur::Blur::enable(&w);
+            } else if !blur {
+                self.blur = None;
+            }
+        }
+        let changed = |k: &str| old.is_none_or(|o| {
+            let i = settings::DEFS.iter().position(|d| d.key == k).unwrap();
+            o.get(i) != s.get(i)
+        });
+        if changed("KeepAbove") && (old.is_some() || s.bool("KeepAbove")) {
+            if let Some(k) = &self.kwin {
+                k.set_keep_above(s.bool("KeepAbove"));
+            }
+        }
+        if old.is_some() && (changed("SortOrder") || changed("SortReverse")) {
+            self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
+            self.prefetch();
+        } else if old.is_none() && (s.choice("SortOrder") != 0 || s.bool("SortReverse")) {
+            self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
+        }
+        if old.is_some() && (changed("RawMode") || changed("ColourProfiles") || changed("PlayAnimations")) {
+            // decode again with the new settings
+            self.cache.clear();
+            self.shown = None;
+            let path = self.files.current().to_path_buf();
+            self.request(path);
+            self.prefetch();
+        }
+        if old.is_some() && (changed("MaxWindowSize") || changed("MaxWindowAspect") || changed("FitMode")) && self.view.is_fit() {
+            self.followed_zoom = -1.0;
+        }
+        self.redraw();
+    }
+
+    /// New settings from the settings window or the menu: save, apply.
+    fn change_settings(&mut self, new: settings::Settings) {
+        let old = settings::current().clone();
+        if let Err(e) = new.save() {
+            eprintln!("lumaris: cannot save the settings: {e}");
+        }
+        settings::replace(new);
+        self.apply_settings(Some(&old));
+    }
+
     fn open_menu(&mut self, at: (f64, f64)) {
         use menu::{Action, Item};
         let Some(window) = self.window.clone() else { return };
@@ -317,10 +468,12 @@ impl App {
         self.menu_apps = if have_image { apps::for_file(&file) } else { Vec::new() };
         let open_with = Item::sub("Open image with", self.menu_apps.iter().enumerate().map(|(i, a)| Item::new(&a.name, "", Action::OpenWith(i))).collect());
         let current = self.slideshow.map(|d| d.as_millis() as u64).unwrap_or(0);
-        let slideshow = [(0, "Off", "Esc"), (1000, "1 second", "1"), (2000, "2 seconds", "2"), (3000, "3 seconds", "3"), (5000, "5 seconds", "5"), (10000, "10 seconds", "")]
+        let default_s = settings::current().number("SlideshowInterval");
+        let start_label = format!("Start ({default_s} s per image)");
+        let mut slideshow: Vec<Item> = vec![Item::new(&start_label, "", Action::SlideshowStart), Item::separator()];
+        slideshow.extend([(0, "Off", "Esc"), (1000, "1 second", "1"), (2000, "2 seconds", "2"), (3000, "3 seconds", "3"), (5000, "5 seconds", "5"), (10000, "10 seconds", "")]
             .into_iter()
-            .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms))
-            .collect();
+            .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms)));
         let zoom = vec![
             Item::new("Fit to window", "Enter", Action::Fit),
             Item::new("Original size (100%)", "", Action::ActualSize),
@@ -343,26 +496,37 @@ impl App {
             Item::sub("Zoom", zoom),
             Item::check("Full screen", "F11", Action::Fullscreen, window.fullscreen().is_some()),
             Item::separator(),
+            Item::check("Image info", "I", Action::ImageInfo, self.info.is_some()),
+            Item::new("Settings…", "Ctrl+,", Action::Settings),
+            Item::separator(),
             Item::new("Exit", "Esc", Action::Quit),
         ];
         let s = window.inner_size();
         self.menu = Some(menu::Menu::open(items, at, (s.width, s.height), window.scale_factor()));
-        self.sync_menu();
+        self.sync_overlays();
     }
 
     fn close_menu(&mut self) {
         if self.menu.take().is_some() {
-            self.sync_menu();
+            self.sync_overlays();
         }
     }
 
-    /// Shows the current menu state (or no menu)
-    fn sync_menu(&mut self) {
-        if let Some(r) = self.renderer.as_mut() {
-            match self.menu.as_mut() {
-                Some(m) => r.set_overlays(&m.layers()),
-                None => r.set_overlays(&[]),
+    /// Shows the current panels: image info, settings window, menu (on top)
+    fn sync_overlays(&mut self) {
+        let App { renderer, menu, settings_panel, info, .. } = self;
+        if let Some(r) = renderer.as_mut() {
+            let mut layers = Vec::new();
+            if let Some(i) = info.as_mut() {
+                layers.extend(i.layer());
             }
+            if let Some(p) = settings_panel.as_mut() {
+                layers.extend(p.layers());
+            }
+            if let Some(m) = menu.as_mut() {
+                layers.extend(m.layers());
+            }
+            r.set_overlays(&layers);
         }
         self.redraw();
     }
@@ -388,7 +552,12 @@ impl App {
             Action::Previous => self.step(event_loop, -1),
             Action::Slideshow(0) => self.stop_slideshow(),
             Action::Slideshow(ms) => self.start_slideshow(Duration::from_millis(ms)),
-            Action::ToggleLoop => self.loop_folder = !self.loop_folder,
+            Action::ToggleLoop => {
+                let mut s = settings::current().clone();
+                let i = settings::DEFS.iter().position(|d| d.key == "LoopFolder").unwrap();
+                s.set(i, settings::Value::Bool(!self.loop_folder));
+                self.change_settings(s);
+            }
             Action::Fit => self.fit(event_loop),
             Action::ActualSize => {
                 self.view.zoom_to(1.0);
@@ -396,10 +565,17 @@ impl App {
             }
             Action::ZoomIn | Action::ZoomOut => {
                 let c = self.window_center();
-                self.view.zoom_at(if action == Action::ZoomIn { WHEEL_STEP } else { 1.0 / WHEEL_STEP }, c);
+                self.view.zoom_at(if action == Action::ZoomIn { wheel_step() } else { 1.0 / wheel_step() }, c);
                 self.redraw();
             }
             Action::Fullscreen => self.toggle_fullscreen(),
+            Action::ImageInfo => self.toggle_info(),
+            Action::Settings => self.open_settings(),
+            Action::SlideshowStart => {
+                let s = settings::current().number("SlideshowInterval");
+                self.start_slideshow(Duration::from_secs_f64(s));
+            }
+            Action::Choice(_) => {}
             Action::Quit => event_loop.exit(),
         }
     }
@@ -434,9 +610,27 @@ impl App {
             let v = m.version;
             match m.key(name) {
                 menu::Click::Run(a) => self.run(event_loop, a),
-                _ if m.version != v => self.sync_menu(),
+                _ if m.version != v => self.sync_overlays(),
                 _ => {}
             }
+            return;
+        }
+        if let Some(p) = self.settings_panel.as_mut() {
+            if key == Key::Named(NamedKey::Escape) {
+                if p.escape() {
+                    self.close_settings();
+                } else {
+                    self.sync_overlays();
+                }
+            }
+            return;
+        }
+        if let (Key::Character(","), true) = (key.as_ref(), self.mods.control_key()) {
+            self.open_settings();
+            return;
+        }
+        if let (Key::Character("i" | "I"), false) = (key.as_ref(), self.mods.control_key()) {
+            self.toggle_info();
             return;
         }
         if let (Key::Character(c), true) = (key.as_ref(), self.mods.control_key()) {
@@ -472,7 +666,9 @@ impl App {
             Key::Named(NamedKey::End) => self.go_to(event_loop, self.files.files.len() - 1),
             Key::Named(NamedKey::F11) => self.toggle_fullscreen(),
             Key::Named(NamedKey::Escape) => {
-                if self.slideshow.is_some() {
+                if self.info.is_some() {
+                    self.toggle_info();
+                } else if self.slideshow.is_some() {
                     self.stop_slideshow();
                 } else if self.window.as_ref().is_some_and(|w| w.fullscreen().is_some()) {
                     self.toggle_fullscreen();
@@ -482,12 +678,12 @@ impl App {
             }
             Key::Character("+" | "=") => {
                 let c = self.window_center();
-                self.view.zoom_at(WHEEL_STEP, c);
+                self.view.zoom_at(wheel_step(), c);
                 self.redraw();
             }
             Key::Character("-") => {
                 let c = self.window_center();
-                self.view.zoom_at(1.0 / WHEEL_STEP, c);
+                self.view.zoom_at(1.0 / wheel_step(), c);
                 self.redraw();
             }
             // Space: fit <-> 100%, Enter: fit
@@ -513,7 +709,7 @@ impl App {
             ["wheel", steps, x, y] => {
                 let (Ok(s), Ok(x), Ok(y)) = (steps.parse::<f64>(), x.parse(), y.parse()) else { return };
                 self.cursor = (x, y);
-                self.view.zoom_at(WHEEL_STEP.powf(s), (x, y));
+                self.view.zoom_at(wheel_step().powf(s), (x, y));
                 self.redraw();
             }
             ["key", name] => {
@@ -549,6 +745,7 @@ impl App {
                     }
                 }
             }
+            ["settings"] => self.open_settings(),
             ["apps"] => {
                 for a in apps::for_file(self.files.current()) {
                     println!("APP {} ({})", a.name, a.id);
@@ -571,7 +768,10 @@ impl ApplicationHandler<UserEvent> for App {
             if Instant::now() >= due {
                 self.next_slide = None;
                 let before = self.files.index;
-                self.step(event_loop, 1);
+                let at_end = before + 1 == self.files.files.len() && settings::current().bool("SlideshowStopAtEnd");
+                if !at_end {
+                    self.step(event_loop, 1);
+                }
                 if self.files.index == before {
                     self.stop_slideshow(); // last image and no looping (or a single image)
                 }
@@ -600,7 +800,7 @@ impl ApplicationHandler<UserEvent> for App {
         let mut attrs = Window::default_attributes()
             .with_title(Self::title_for(&path, suffix))
             .with_inner_size(size)
-            .with_transparent(BACKGROUND_OPACITY < 1.0);
+            .with_transparent(true);
         #[cfg(target_os = "linux")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
@@ -614,7 +814,7 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        let mut renderer = match gpu::Renderer::new(self.gpu.take().expect("gpu"), window.clone()) {
+        let renderer = match gpu::Renderer::new(self.gpu.take().expect("gpu"), window.clone()) {
             Ok(r) => r,
             Err(e) => {
                 eprintln!("lumaris: {e}");
@@ -622,10 +822,9 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        if renderer.transparent() {
-            self.blur = blur::Blur::enable(&window);
+        if settings::current().bool("StartFullScreen") {
+            window.set_fullscreen(Some(Fullscreen::Borderless(None)));
         }
-        renderer.set_background(BACKGROUND_COLOR, BACKGROUND_OPACITY);
         if self.timing {
             eprintln!("lumaris: blur {}, KWin placement {}", self.blur.is_some(), self.kwin.is_some());
             eprintln!("lumaris: window and surface ready after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
@@ -634,6 +833,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.view.resize(s.width, s.height);
         self.window = Some(window);
         self.renderer = Some(renderer);
+        self.apply_settings(None);
         match first {
             Ok(img) => {
                 self.cache.push((path.clone(), img.clone()));
@@ -693,6 +893,10 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(s) => {
                 self.close_menu();
+                if let Some(p) = self.settings_panel.as_mut() {
+                    p.resize((s.width, s.height));
+                    self.sync_overlays();
+                }
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(s.width, s.height);
                 }
@@ -709,7 +913,7 @@ impl ApplicationHandler<UserEvent> for App {
                     self.first_frame_done = true;
                     // after the first frame: prepare the menu (applications, font) in the background
                     apps::warm_up();
-                    menu::warm_up();
+                    ui::warm_up();
                     if self.timing {
                         eprintln!("lumaris: first frame after {:.1} ms", self.started.elapsed().as_secs_f64() * 1000.0);
                     }
@@ -718,13 +922,23 @@ impl ApplicationHandler<UserEvent> for App {
                     self.redraw();
                 } else {
                     self.update_vector();
+                    if self.info.is_some() && (self.view.zoom - self.info_zoom).abs() > 1e-6 {
+                        self.refresh_info();
+                    }
                 }
             }
             WindowEvent::CursorMoved { position: PhysicalPosition { x, y }, .. } => {
                 if let Some(m) = self.menu.as_mut() {
                     self.cursor = (x, y);
                     if m.hover((x, y)) {
-                        self.sync_menu();
+                        self.sync_overlays();
+                    }
+                    return;
+                }
+                if let Some(p) = self.settings_panel.as_mut() {
+                    self.cursor = (x, y);
+                    if p.hover((x, y)) {
+                        self.sync_overlays();
                     }
                     return;
                 }
@@ -740,6 +954,10 @@ impl ApplicationHandler<UserEvent> for App {
             {
                 self.menu_click(event_loop, self.cursor, b == MouseButton::Right);
             }
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.settings_panel.is_some() => {
+                self.settings_click(self.cursor);
+            }
+            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } if self.settings_panel.is_some() => {}
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
                 (MouseButton::Right, ElementState::Pressed) => {
                     self.drag = None;
@@ -757,8 +975,12 @@ impl ApplicationHandler<UserEvent> for App {
                     MouseScrollDelta::LineDelta(_, y) => y as f64,
                     MouseScrollDelta::PixelDelta(p) => p.y / 60.0,
                 };
-                if steps != 0.0 {
-                    self.view.zoom_at(WHEEL_STEP.powf(steps), self.cursor);
+                // the wheel zooms or navigates (setting); Ctrl+wheel does the other
+                let navigate = (settings::current().choice("WheelAction") == 1) != self.mods.control_key();
+                if steps != 0.0 && navigate {
+                    self.step(event_loop, if steps < 0.0 { 1 } else { -1 });
+                } else if steps != 0.0 {
+                    self.view.zoom_at(wheel_step().powf(steps), self.cursor);
                     self.redraw();
                 }
             }
@@ -856,7 +1078,7 @@ fn main() {
         mods: ModifiersState::empty(),
         slideshow: None,
         next_slide: None,
-        loop_folder: true,
+        loop_folder: settings::current().bool("LoopFolder"),
         animation: None,
         proxy: event_loop.create_proxy(),
         vector_request: 0,
@@ -864,6 +1086,10 @@ fn main() {
         current: None,
         menu: None,
         menu_apps: Vec::new(),
+        settings_panel: None,
+        size_before_settings: None,
+        info: None,
+        info_zoom: 0.0,
     };
     if let Err(e) = event_loop.run_app(&mut app) {
         eprintln!("lumaris: {e}");

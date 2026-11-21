@@ -86,6 +86,29 @@ impl KWin {
         Some(KWin { conn, name, frame })
     }
 
+    /// Keeps Lumaris's window above other windows (or not).
+    pub fn set_keep_above(&self, on: bool) {
+        let pid = std::process::id();
+        let js = format!(
+            "(function() {{ var l = workspace.windowList(); for (var i = 0; i < l.length; i++) {{ if (l[i].pid == {pid} && l[i].normalWindow) l[i].keepAbove = {on}; }} }})();"
+        );
+        let name = format!("lumaris-keepabove-{pid}");
+        let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
+        let path = dir.join(format!("{name}.js"));
+        if std::fs::write(&path, js).is_err() {
+            return;
+        }
+        if let Ok(reply) = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "loadScript", &(path.to_str().unwrap_or(""), name.as_str())) {
+            if let Ok(id) = reply.body().deserialize::<i32>() {
+                if id >= 0 {
+                    let _ = self.conn.call_method(Some("org.kde.KWin"), format!("/Scripting/Script{id}").as_str(), Some("org.kde.kwin.Script"), "run", &());
+                }
+            }
+        }
+        let _ = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(name.as_str(),));
+        let _ = std::fs::remove_file(&path);
+    }
+
     pub fn frame(&self) -> Option<Frame> {
         *self.frame.lock().unwrap()
     }

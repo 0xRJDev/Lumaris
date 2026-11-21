@@ -47,6 +47,41 @@ impl FileList {
         Some(FileList { files, index })
     }
 
+    /// Sorts by name (natural order), date modified, file size or randomly; keeps the current file.
+    pub fn sort(&mut self, order: usize, reverse: bool) {
+        let current = self.files[self.index].clone();
+        match order {
+            1 | 2 => {
+                let key = |p: &PathBuf| {
+                    let m = std::fs::metadata(p).ok();
+                    if order == 1 {
+                        m.and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0)
+                    } else {
+                        m.map(|m| m.len() as u128).unwrap_or(0)
+                    }
+                };
+                let mut keyed: Vec<(u128, PathBuf)> = self.files.drain(..).map(|p| (key(&p), p)).collect();
+                keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| natural_cmp(&file_name(&a.1), &file_name(&b.1))));
+                self.files = keyed.into_iter().map(|(_, p)| p).collect();
+            }
+            3 => {
+                // shuffle (xorshift, seeded by the clock)
+                let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+                for i in (1..self.files.len()).rev() {
+                    x ^= x << 13;
+                    x ^= x >> 7;
+                    x ^= x << 17;
+                    self.files.swap(i, (x % (i as u64 + 1)) as usize);
+                }
+            }
+            _ => self.files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b))),
+        }
+        if reverse && order != 3 {
+            self.files.reverse();
+        }
+        self.index = self.files.iter().position(|p| *p == current).unwrap_or(0);
+    }
+
     pub fn current(&self) -> &Path {
         &self.files[self.index]
     }

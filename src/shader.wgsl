@@ -10,7 +10,7 @@ struct U {
     zoom: f32,
     mode: u32,
     lod: f32,
-    pad: f32,
+    checker: f32,   // checkerboard square size behind transparent parts, 0 = none
 };
 
 @group(0) @binding(0) var<uniform> u: U;
@@ -89,5 +89,11 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         return textureSampleLevel(tex, s_near, in.uv, 0.0);
     }
     let c = sample(in.uv);
+    if u.checker > 0.0 {
+        let q = floor(in.pos.xy / u.checker);
+        let light = (i32(q.x) + i32(q.y)) % 2 == 0;
+        let chk = select(vec3(0.4), vec3(0.6), light);
+        return vec4(mix(chk, c.rgb, c.a), 1.0);
+    }
     return vec4(c.rgb * c.a, c.a);
 }

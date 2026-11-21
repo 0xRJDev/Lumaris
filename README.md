@@ -16,6 +16,10 @@ A lean and fast image viewer for Linux, written in Rust.
 - Right-click menu in the desktop's style (KDE font and colours): open with the applications
   associated with the file type (default first), open the containing folder, copy the image or
   its path, navigation, slideshow, zoom, full screen
+- Image info box (key I): file, folder, size, format, dates and camera details (EXIF)
+- Settings window (Ctrl+, or the menu): window, background (blurred / see-through desktop,
+  solid colour, checkerboard), zoom, navigation (sort order), slideshow, formats; saved to
+  `~/.config/lumaris/lumaris.conf`, which can also be edited by hand
 - Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
   (embedded preview, LibRaw), BMP, TIFF, QOI, ICO, TGA, PNM; animated GIF, WebP and PNG
 
@@ -36,8 +40,10 @@ target/release/lumaris <image or folder>
 | Space / Enter | Fit to window or 100% / fit to window |
 | 1 to 9 | Slideshow, 1 to 9 seconds per image (Ctrl: tenths of a second) |
 | Ctrl+C / Ctrl+Shift+C | Copy the image / its file path |
+| I | Image info |
+| Ctrl+, | Settings |
 | F11 | Full screen |
-| Esc | Stop the slideshow, leave full screen, quit |
+| Esc | Close a panel, stop the slideshow, leave full screen, quit |
 | Right click | Menu |
 | Mouse back / forward | Previous / next image |
 
