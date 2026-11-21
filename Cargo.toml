@@ -10,7 +10,13 @@ repository = "https://github.com/0xRJDev/Lumae-Rust"
 winit = { version = "0.30", default-features = false, features = ["wayland", "wayland-dlopen", "x11", "rwh_06"] }
 wgpu = { version = "25", default-features = false, features = ["vulkan", "gles", "wgsl"] }
 pollster = "0.4"
+ctrlc = { version = "3", features = ["termination"] }
 bytemuck = { version = "1", features = ["derive"] }
+wayland-client = "0.31"
+wayland-backend = { version = "0.3", features = ["client_system"] }
+wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-plasma = { version = "0.3", features = ["client"] }
+zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "qoi", "ico", "tga", "pnm", "rayon"] }
 
 [profile.release]

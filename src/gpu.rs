@@ -84,7 +84,8 @@ pub struct Renderer {
     linear: wgpu::Sampler,
     nearest: wgpu::Sampler,
     image: Option<ImageTexture>,
-    pub background: wgpu::Color,
+    background: wgpu::Color,
+    transparent: bool,
 }
 
 impl Renderer {
@@ -96,6 +97,12 @@ impl Renderer {
         }
         // filter in the image's own (gamma) space, like other image viewers: no sRGB conversion
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
+        // see-through window: needs a compositor that takes premultiplied alpha from Vulkan/GL
+        if std::env::var_os("LUMAE_DEBUG_TIMING").is_some() {
+            eprintln!("lumae: {:?} {:?}, alpha modes {:?}", gpu.adapter.get_info().backend, gpu.adapter.get_info().name, caps.alpha_modes);
+        }
+        let transparent = caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied);
+        let alpha_mode = if transparent { wgpu::CompositeAlphaMode::PreMultiplied } else { caps.alpha_modes[0] };
         let size = window.inner_size();
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -104,7 +111,7 @@ impl Renderer {
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             desired_maximum_frame_latency: 2,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
         };
         surface.configure(&gpu.device, &config);
@@ -184,8 +191,21 @@ impl Renderer {
             linear,
             nearest,
             image: None,
-            background: wgpu::Color { r: 0.12, g: 0.12, b: 0.12, a: 1.0 },
+            background: wgpu::Color::BLACK,
+            transparent,
         })
+    }
+
+    /// true when the window can be see-through
+    pub fn transparent(&self) -> bool {
+        self.transparent
+    }
+
+    /// Background colour (0..1) and how much it covers the desktop (0 = see-through, 1 = solid).
+    /// Without transparency support the background is solid.
+    pub fn set_background(&mut self, rgb: [f64; 3], opacity: f64) {
+        let a = if self.transparent { opacity.clamp(0.0, 1.0) } else { 1.0 };
+        self.background = wgpu::Color { r: rgb[0] * a, g: rgb[1] * a, b: rgb[2] * a, a };
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -359,7 +379,7 @@ fn make_pipeline(
             compilation_options: Default::default(),
             targets: &[Some(wgpu::ColorTargetState {
                 format,
-                blend: if blend { Some(wgpu::BlendState::ALPHA_BLENDING) } else { None },
+                blend: if blend { Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING) } else { None },
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),

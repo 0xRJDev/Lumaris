@@ -45,17 +45,26 @@ impl View {
         self.last_tick = None;
     }
 
+    /// The window was resized around its centre (KWin keeps the centre in place): the content
+    /// keeps its position on the screen, also during a zoom animation.
     pub fn resize(&mut self, w: u32, h: u32) {
-        let c = self.center_at(self.zoom);
         let old = self.win;
         self.win = (w.max(1) as f64, h.max(1) as f64);
         if self.fit_mode {
             self.fit();
         } else {
-            // keep the content centred in the resized window
-            let c = (c.0 + (self.win.0 - old.0) / 2.0, c.1 + (self.win.1 - old.1) / 2.0);
-            self.set_center(c);
+            self.anchor.0 += (self.win.0 - old.0) / 2.0;
+            self.anchor.1 += (self.win.1 - old.1) / 2.0;
         }
+    }
+
+    /// true while the image is fitted to the window (not zoomed by the user)
+    pub fn is_fit(&self) -> bool {
+        self.fit_mode
+    }
+
+    pub fn image_size(&self) -> (f64, f64) {
+        self.img
     }
 
     /// Zooms by `factor` around `at` (window pixels), smoothly.

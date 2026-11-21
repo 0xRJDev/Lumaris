@@ -68,12 +68,18 @@ fn sharp_pixels(uv: vec2<f32>) -> vec4<f32> {
     return textureSampleLevel(tex, s_lin, (fl + f) / u.tex_size, 0.0);
 }
 
+fn sample(uv: vec2<f32>) -> vec4<f32> {
+    switch u.mode {
+        case 1u: { return bicubic(uv); }
+        case 2u: { return sharp_pixels(uv); }
+        case 3u: { return textureSampleLevel(tex, s_near, uv, 0.0); }
+        default: { return textureSampleLevel(tex, s_lin, uv, u.lod); }
+    }
+}
+
+// output with premultiplied alpha (the window itself may be see-through)
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    switch u.mode {
-        case 1u: { return bicubic(in.uv); }
-        case 2u: { return sharp_pixels(in.uv); }
-        case 3u: { return textureSampleLevel(tex, s_near, in.uv, 0.0); }
-        default: { return textureSampleLevel(tex, s_lin, in.uv, u.lod); }
-    }
+    let c = sample(in.uv);
+    return vec4(c.rgb * c.a, c.a);
 }
