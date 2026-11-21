@@ -61,10 +61,14 @@ fn bicubic(uv: vec2<f32>) -> vec4<f32> {
     return clamp(r, vec4(0.0), vec4(1.0));
 }
 
+// Square pixels: each image pixel is drawn in one colour; only the last screen pixel at its
+// edge blends with the neighbour (antialiasing at non-integer zoom).
 fn sharp_pixels(uv: vec2<f32>) -> vec4<f32> {
     let px = uv * u.tex_size;
     let fl = floor(px);
-    let f = clamp((px - fl - 0.5) * u.zoom + 0.5, vec2(0.0), vec2(1.0));
+    let d = px - fl - 0.5;                       // distance from the pixel centre (-0.5..0.5)
+    let inner = max(0.5 - 0.5 / u.zoom, 0.0);    // part of the pixel without blending
+    let f = (d - clamp(d, vec2(-inner), vec2(inner))) * u.zoom + 0.5;
     return textureSampleLevel(tex, s_lin, (fl + f) / u.tex_size, 0.0);
 }
 
