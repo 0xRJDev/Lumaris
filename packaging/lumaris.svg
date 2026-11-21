@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="512" height="512" viewBox="0 0 512 512">
+  <title>Lumaris</title>
+  <g id="Layer_1" data-name="Layer 1">
+    <path class="mint" d="M112 28 L400 28 C446.392 28 484 65.608 484 112 L484 400 C484 446.392 446.392 484 400 484 L112 484 C65.608 484 28 446.392 28 400 L28 112 C28 65.608 65.608 28 112 28 Z" fill="#76e4be"/>
+    <path class="white" d="M120 56 L392 56 C427.346 56 456 84.654 456 120 L456 392 C456 427.346 427.346 456 392 456 L120 456 C84.654 456 56 427.346 56 392 L56 120 C56 84.654 84.654 56 120 56 Z" fill="#ffffff"/>
+    <path class="mint" d="M126 78 L386 78 C412.51 78 434 99.49 434 126 L434 386 C434 412.51 412.51 434 386 434 L126 434 C99.49 434 78 412.51 78 386 L78 126 C78 99.49 99.49 78 126 78 Z" fill="#76e4be"/>
+    <circle class="white" cx="390.291" cy="118.682" r="22.51" fill="#ffffff"/>
+    <polygon points="167.571,282.23 264.806,411.353 70.336,411.353" fill="#ffffff" stroke="#ffffff" stroke-miterlimit="10"/>
+    <polygon points="345.53,256 445.093,408.366 245.966,408.366" fill="#ffffff" stroke="#ffffff" stroke-miterlimit="10"/>
+    <path d="M82.568 398.186 L432.86 398.186 C439.616 398.186 445.093 403.663 445.093 410.418 L445.093 421.767 C445.093 428.523 439.616 434 432.86 434 L82.568 434 C75.813 434 70.336 428.523 70.336 421.767 L70.336 410.418 C70.336 403.663 75.813 398.186 82.568 398.186 Z" fill="#ffffff" stroke="#ffffff" stroke-miterlimit="10"/>
+    <polygon points="255.907,108.654 339.637,222.894 255.907,408.366 172.178,222.894" fill="#76e4be"/>
+    <polygon points="256,118.682 329.26,223.364 256,393.318 182.74,223.364" fill="#ffffff"/>
+    <polygon points="256,250.458 209.508,224.595 256,364.992" fill="#76e4be"/>
+    <polygon points="256,148.239 302.492,224.595 256,250.458" fill="#76e4be"/>
+  </g>
+</svg>

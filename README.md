@@ -1,3 +1,5 @@
+<p align="center"><img src="packaging/lumaris.svg" width="128" alt=""></p>
+
 # Lumaris
 
 A lean and fast image viewer for Linux, written in Rust.
@@ -23,12 +25,14 @@ A lean and fast image viewer for Linux, written in Rust.
 - Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
   (embedded preview, LibRaw), BMP, TIFF, QOI, ICO, TGA, PNM; animated GIF, WebP and PNG
 
-## Build
+## Build and install
 
 ```sh
-cargo build --release
-target/release/lumaris <image or folder>
+./install.sh                # builds and installs to ~/.local (binary, desktop entry, icon)
+lumaris <image or folder>
 ```
+
+Or only build: `cargo build --release`, then run `target/release/lumaris`.
 
 ## Keys
 
