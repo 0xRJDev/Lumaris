@@ -101,6 +101,10 @@ struct App {
     settings_panel: Option<settings_ui::SettingsPanel>,
     /// window size before the settings window enlarged it
     size_before_settings: Option<PhysicalSize<u32>>,
+    /// window size before the menu enlarged it
+    size_before_menu: Option<PhysicalSize<u32>>,
+    /// zooming with Shift+wheel: the window does not follow the zoom
+    zoom_in_place: bool,
     info: Option<info::InfoBox>,
     info_zoom: f64,
     help: Option<info::InfoBox>,
@@ -179,6 +183,7 @@ impl App {
         }
         self.view.fit();
         self.followed_zoom = self.view.zoom;
+        self.zoom_in_place = false;
         self.redraw();
     }
 
@@ -190,6 +195,9 @@ impl App {
             return;
         }
         self.followed_zoom = z;
+        if self.zoom_in_place {
+            return; // Shift+wheel
+        }
         if self.windowed().is_none() || !settings::current().bool("WindowFollowsZoom") {
             return;
         }
@@ -403,6 +411,7 @@ impl App {
             First => self.go_to(event_loop, 0),
             Last => self.go_to(event_loop, self.files.files.len() - 1),
             ZoomIn | ZoomOut => {
+                self.zoom_in_place = false;
                 let c = self.window_center();
                 self.view.zoom_at(if cmd == ZoomIn { wheel_step() } else { 1.0 / wheel_step() }, c);
                 self.redraw();
@@ -781,6 +790,20 @@ impl App {
             items.insert(3, Item::sub("Commands", user)); // after the open entries
         }
         drop(km);
+        // a window too small for the menu grows while the menu is open
+        let mut at = at;
+        let (nw, nh) = menu::Menu::needed_size(&items, window.scale_factor());
+        let s = window.inner_size();
+        if self.windowed().is_some() && (s.width < nw || s.height < nh) {
+            let (mw, mh) = self.max_client_size_now();
+            let new = PhysicalSize::new(s.width.max(nw).min(mw as u32).max(s.width), s.height.max(nh).min(mh as u32).max(s.height));
+            self.size_before_menu = Some(s);
+            self.apply_window_size(new);
+            // the window grows around its centre: the pointer moves by half the growth
+            let n = window.inner_size();
+            at = (at.0 + (n.width as f64 - s.width as f64) / 2.0, at.1 + (n.height as f64 - s.height as f64) / 2.0);
+            self.cursor = at;
+        }
         let s = window.inner_size();
         self.menu = Some(menu::Menu::open(items, at, (s.width, s.height), window.scale_factor()));
         self.sync_overlays();
@@ -788,8 +811,30 @@ impl App {
 
     fn close_menu(&mut self) {
         if self.menu.take().is_some() {
+            if let Some(size) = self.size_before_menu.take() {
+                if self.windowed().is_some() {
+                    self.apply_window_size(size);
+                }
+            }
             self.sync_overlays();
         }
+    }
+
+    /// Largest window content size (without an event loop at hand)
+    fn max_client_size_now(&self) -> (f64, f64) {
+        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+        if let Some(f) = self.kwin.as_ref().and_then(|k| k.frame()) {
+            let w = (f.area.0 - f.margins[0] - f.margins[2]) as f64 * scale;
+            let h = (f.area.1 - f.margins[1] - f.margins[3]) as f64 * scale;
+            if w > 0.0 && h > 0.0 {
+                return (w, h);
+            }
+        }
+        self.window
+            .as_ref()
+            .and_then(|w| w.current_monitor())
+            .map(|m| (m.size().width as f64 * 0.95, m.size().height as f64 * 0.9))
+            .unwrap_or((1920.0, 1080.0))
     }
 
     /// Shows the current panels: image info, settings window, menu (on top)
@@ -969,9 +1014,10 @@ impl App {
     fn test_command(&mut self, event_loop: &ActiveEventLoop, cmd: &str) {
         let a: Vec<&str> = cmd.split_whitespace().collect();
         match a.as_slice() {
-            ["wheel", steps, x, y] => {
+            ["wheel", steps, x, y] | ["shiftwheel", steps, x, y] => {
                 let (Ok(s), Ok(x), Ok(y)) = (steps.parse::<f64>(), x.parse(), y.parse()) else { return };
                 self.cursor = (x, y);
+                self.zoom_in_place = a[0] == "shiftwheel";
                 self.view.zoom_at(wheel_step().powf(s), (x, y));
                 self.redraw();
             }
@@ -1170,7 +1216,11 @@ impl ApplicationHandler<UserEvent> for App {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(s) => {
-                self.close_menu();
+                // resized by the user or the compositor (not the menu's own enlargement): close the menu
+                if self.menu.as_ref().is_some_and(|m| m.window_size() != (s.width, s.height)) {
+                    self.size_before_menu = None;
+                    self.close_menu();
+                }
                 if let Some(p) = self.settings_panel.as_mut() {
                     p.resize((s.width, s.height));
                     self.sync_overlays();
@@ -1304,15 +1354,20 @@ impl ApplicationHandler<UserEvent> for App {
             },
             WindowEvent::MouseWheel { delta, .. } => {
                 self.close_menu();
-                let steps = match delta {
-                    MouseScrollDelta::LineDelta(_, y) => y as f64,
-                    MouseScrollDelta::PixelDelta(p) => p.y / 60.0,
+                let shift = self.mods.shift_key();
+                let (x, y) = match delta {
+                    MouseScrollDelta::LineDelta(x, y) => (x as f64, y as f64),
+                    MouseScrollDelta::PixelDelta(p) => (p.x / 60.0, p.y / 60.0),
                 };
+                // with Shift, KDE may turn the wheel into sideways scrolling
+                let steps = if y == 0.0 && shift { x } else { y };
                 // the wheel zooms or navigates (setting); Ctrl+wheel does the other
                 let navigate = (settings::current().choice("WheelAction") == 1) != self.mods.control_key();
-                if steps != 0.0 && navigate {
+                if steps != 0.0 && navigate && !shift {
                     self.step(event_loop, if steps < 0.0 { 1 } else { -1 });
                 } else if steps != 0.0 {
+                    // Shift+wheel: zoom only the image, the window keeps its size
+                    self.zoom_in_place = shift;
                     self.view.zoom_at(wheel_step().powf(steps), self.cursor);
                     self.redraw();
                 }
@@ -1442,6 +1497,8 @@ fn main() {
         menu_apps: Vec::new(),
         settings_panel: None,
         size_before_settings: None,
+        size_before_menu: None,
+        zoom_in_place: false,
         info: None,
         info_zoom: 0.0,
         help: None,

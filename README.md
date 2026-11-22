@@ -45,7 +45,7 @@ Press F1 in Lumaris for the full list. All keys can be changed in
 | Key | Action |
 |---|---|
 | Right, Page Down / Left, Page Up, Backspace | Next / previous image |
-| Mouse wheel, + / - | Zoom around the pointer |
+| Mouse wheel, + / - | Zoom around the pointer (Shift+wheel: the window keeps its size) |
 | Space / Enter / 0 | Fit or 100% / fit / 100% |
 | Up, Down, Ctrl+Left, Ctrl+Right | Move the image when zoomed in |
 | R / Shift+R, H / V | Rotate right / left, flip horizontally / vertically |

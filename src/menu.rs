@@ -117,7 +117,8 @@ impl Menu {
     }
 
     /// Adds a menu level at (x, y); `parent` = x range of the parent level for submenus.
-    fn push_level(&mut self, items: Vec<Item>, x: f32, y: f32, parent: Option<(f32, f32)>, opened_by: Option<usize>) {
+    /// Size of a menu level and the top of each item
+    fn measure(&self, items: &[Item]) -> (f32, f32, Vec<f32>) {
         let st = style();
         let px = self.px();
         let pad = self.unit(4.0);
@@ -126,7 +127,7 @@ impl Menu {
         let (mut lw, mut sw) = (0.0f32, 0.0f32);
         let mut tops = Vec::new();
         let mut h = pad;
-        for it in &items {
+        for it in items {
             tops.push(h);
             h += if it.separator { sep_h } else { ih };
             if let Some(f) = &st.font {
@@ -138,6 +139,28 @@ impl Menu {
         let w = (pad + self.unit(30.0) + lw + if sw > 0.0 { self.unit(36.0) + sw } else { 0.0 } + self.unit(30.0) + pad)
             .max(self.unit(160.0))
             .ceil();
+        (w, h.ceil(), tops)
+    }
+
+    /// Window size needed to show the menu with its widest submenu beside it
+    pub fn needed_size(items: &[Item], scale: f64) -> (u32, u32) {
+        let m = Menu { levels: Vec::new(), scale: scale as f32, window: (f32::MAX, f32::MAX), version: 0 };
+        let (w, h, tops) = m.measure(items);
+        let (mut sub_w, mut bottom) = (0.0f32, h);
+        for (it, top) in items.iter().zip(&tops) {
+            if !it.children.is_empty() {
+                let (cw, ch, _) = m.measure(&it.children);
+                sub_w = sub_w.max(cw);
+                bottom = bottom.max(top + ch);
+            }
+        }
+        let margin = m.unit(8.0);
+        ((w + sub_w + margin * 2.0) as u32, (bottom + margin * 2.0) as u32)
+    }
+
+    fn push_level(&mut self, items: Vec<Item>, x: f32, y: f32, parent: Option<(f32, f32)>, opened_by: Option<usize>) {
+        let pad = self.unit(4.0);
+        let (w, h, tops) = self.measure(&items);
         let (ww, wh) = self.window;
         let x = match parent {
             // submenu: right of the parent, or left when there is no room
@@ -148,7 +171,7 @@ impl Menu {
         };
         let x = x.min(ww - w).max(0.0).round();
         let y = (if y + h > wh { (wh - h).max(0.0) } else { y }).round();
-        self.levels.push(Level { items, x, y, w, h: h.ceil(), tops, hover: None, opened_by, pixmap: None });
+        self.levels.push(Level { items, x, y, w, h, tops, hover: None, opened_by, pixmap: None });
         self.version += 1;
     }
 
@@ -187,6 +210,11 @@ impl Menu {
                 self.push_level(children, 0.0, y, Some(range), Some(i));
             }
         }
+    }
+
+    /// The window size the menu was laid out for
+    pub fn window_size(&self) -> (u32, u32) {
+        (self.window.0 as u32, self.window.1 as u32)
     }
 
     /// Mouse moved. Returns true when the menu must be redrawn.
