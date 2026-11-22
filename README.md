@@ -1,14 +1,18 @@
 <div align="center">
 
-<img src="packaging/lumaris.svg" alt="" width="112">
-
-# Lumaris
+<img src="docs/assets/title-card.png" alt="Lumaris" width="100%">
 
 **A lean and fast image viewer for Linux**
 
 <sub>Written in Rust • Drawn on the GPU • Made for KDE Plasma on Wayland</sub>
 
-[Install](#install) • [Features](#features) • [Keys](#keys) • [Settings](#settings) • [Desktops](#desktops) • [Build](#build) • [What's new](CHANGELOG.md)
+<a href="#install"><img src="docs/assets/button-install.png" alt="Install" width="128"></a>
+<a href="#features"><img src="docs/assets/button-features.png" alt="Features" width="128"></a>
+<a href="#keys"><img src="docs/assets/button-keys.png" alt="Keys" width="128"></a>
+<a href="#settings"><img src="docs/assets/button-settings.png" alt="Settings" width="128"></a>
+<a href="#desktops"><img src="docs/assets/button-desktops.png" alt="Desktops" width="128"></a>
+<a href="#build"><img src="docs/assets/button-build.png" alt="Build" width="128"></a>
+<a href="CHANGELOG.md"><img src="docs/assets/button-news.png" alt="What's new" width="128"></a>
 
 </div>
 
@@ -21,8 +25,7 @@ your image, with the blurred desktop behind it.
 > **Made and tested on KDE Plasma 6 (Wayland).** It runs on other Wayland desktops and on X11 too,
 > with a few niceties missing; see [Desktops](#desktops).
 
-## <a name="install"></a>Install
-<sub>Up and running in a minute.</sub>
+### <a name="install"></a><img src="docs/assets/card-install.png" alt="Install: up and running in a minute" width="100%">
 
 **Arch Linux:** a PKGBUILD (`lumaris-git`) is in `packaging/aur/`:
 
@@ -41,8 +44,7 @@ lumaris <image or folder>
 `sudo PREFIX=/usr/local ./install.sh` installs system wide. To open your images with Lumaris,
 choose it in **System Settings → Default Applications**.
 
-## <a name="features"></a>Features
-<sub>Everything a viewer needs, nothing it doesn't.</sub>
+### <a name="features"></a><img src="docs/assets/card-features.png" alt="Features: everything a viewer needs, nothing it doesn't" width="100%">
 
 - **Smooth, sharp zoom:** zooms around the mouse pointer, with bicubic enlargement, smooth
   reduction, square pixels for pixel art and SVGs that stay sharp at any size.
@@ -69,8 +71,9 @@ applied.
 
 </details>
 
-## <a name="keys"></a>Keys
-<sub>Press F1 in Lumaris for all of them. Every key can be changed.</sub>
+### <a name="keys"></a><img src="docs/assets/card-keys.png" alt="Keys: press F1 in Lumaris for all of them" width="100%">
+
+Every key can be changed in the settings.
 
 | Key | Action |
 |---|---|
@@ -103,10 +106,9 @@ applied.
 
 </details>
 
-## <a name="settings"></a>Settings
-<sub>Right-click → Settings, or Ctrl+,. Changes apply at once.</sub>
+### <a name="settings"></a><img src="docs/assets/card-settings.png" alt="Settings: right-click, Settings; changes apply at once" width="100%">
 
-Everything is also in plain text files in `~/.config/lumaris/`, if you prefer an editor:
+Open them with right-click → **Settings** or Ctrl+,. Everything is also in plain text files in `~/.config/lumaris/`, if you prefer an editor:
 
 | File | What's in it |
 |---|---|
@@ -114,8 +116,7 @@ Everything is also in plain text files in `~/.config/lumaris/`, if you prefer an
 | `keys.conf` | Key bindings |
 | `commands.conf` | Your own commands: `Name \| Key \| Command`, where `%f` is the image and `%d` its folder |
 
-## <a name="desktops"></a>Desktops
-<sub>Where everything works, and where some of it doesn't.</sub>
+### <a name="desktops"></a><img src="docs/assets/card-desktops.png" alt="Desktops: where everything works, and where some of it doesn't" width="100%">
 
 | | KDE Plasma (Wayland) | Other Wayland desktops | X11 |
 |---|---|---|---|
@@ -126,8 +127,7 @@ Everything is also in plain text files in `~/.config/lumaris/`, if you prefer an
 Not tested yet: other desktops, X11, fractional scaling (125%, 150%) and several monitors.
 [Reports are welcome](https://github.com/0xRJDev/Lumaris/issues).
 
-## <a name="build"></a>Build
-<sub>For those who like to compile things.</sub>
+### <a name="build"></a><img src="docs/assets/card-build.png" alt="Build: for those who like to compile things" width="100%">
 
 | | Packages (Arch names) |
 |---|---|
