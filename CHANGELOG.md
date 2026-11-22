@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Hidden images (name starting with a dot) are skipped while browsing; opening one directly still
+  works. Setting: Navigation → Skip hidden images (on by default)
+
 ## 0.1.0
 
 First release.

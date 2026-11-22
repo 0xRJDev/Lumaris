@@ -54,7 +54,8 @@ choose it in **System Settings → Default Applications**.
 - **Part of the desktop:** see-through window with the blurred desktop behind it, and a right-click
   menu in your KDE colours and font that can reach beyond the window.
 - **Browsing:** next and previous in natural order (`img2` before `img10`), sort orders, looping,
-  slideshows with fades, and comic archives (.cbz) that open like a folder.
+  slideshows with fades, and comic archives (.cbz) that open like a folder. Hidden images
+  (`.image.png`) are skipped unless you open one directly.
 - **Desktop tools:** open with your apps (default first), open the folder, copy the image or its
   path, move to the trash, drag and drop, and your own commands on keys.
 - **Details on demand:** image info with camera details and a histogram, a navigation panel with a

@@ -715,7 +715,14 @@ impl App {
         {
             k.set_keep_above(s.bool("KeepAbove"));
         }
-        if old.is_some() && (changed("SortOrder") || changed("SortReverse")) {
+        if old.is_some()
+            && changed("IgnoreHidden")
+            && let Some(files) = self.files.reload()
+        {
+            self.files = files;
+            self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
+            self.prefetch();
+        } else if old.is_some() && (changed("SortOrder") || changed("SortReverse")) {
             self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
             self.prefetch();
         } else if old.is_none() && (s.choice("SortOrder") != 0 || s.bool("SortReverse")) {

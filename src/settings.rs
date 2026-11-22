@@ -140,6 +140,14 @@ pub const DEFS: &[Def] = &[
         "Images up to this width and height count as pixel art"
     ),
     def!("Navigation", "LoopFolder", "Loop through folder", Bool, B(true), "After the last image comes the first one"),
+    def!(
+        "Navigation",
+        "IgnoreHidden",
+        "Skip hidden images",
+        Bool,
+        B(true),
+        "Leave out images whose name starts with a dot (.image.png), unless you open one directly"
+    ),
     def!("Navigation", "SortOrder", "Sort order", Choice(SORT), C(0), "Order of the images of a folder"),
     def!("Navigation", "SortReverse", "Reverse sort order", Bool, B(false), "Sort in reverse order"),
     def!(

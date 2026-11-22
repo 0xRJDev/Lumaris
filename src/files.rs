@@ -14,6 +14,11 @@ pub fn is_supported(path: &Path) -> bool {
         .is_some_and(|e| EXTENSIONS.iter().chain(crate::decode::RAW_EXTENSIONS).any(|x| x.eq_ignore_ascii_case(e)))
 }
 
+/// A hidden file: its name starts with a dot (".image.png").
+pub fn is_hidden(path: &Path) -> bool {
+    path.file_name().is_some_and(|n| n.as_encoded_bytes().first() == Some(&b'.'))
+}
+
 pub struct FileList {
     pub files: Vec<PathBuf>,
     pub index: usize,
@@ -22,10 +27,19 @@ pub struct FileList {
 impl FileList {
     /// `arg` is an image (its folder is listed), a folder (starts at its first image) or a
     /// comic archive (.cbz/.zip: its images, as if it were a folder).
+    /// Hidden images are left out when the IgnoreHidden setting is on, unless opened explicitly.
     pub fn new(arg: &Path) -> Option<FileList> {
+        Self::list(arg, crate::settings::current().bool("IgnoreHidden"))
+    }
+
+    fn list(arg: &Path, skip_hidden: bool) -> Option<FileList> {
         let arg = std::fs::canonicalize(arg).ok()?;
         if crate::archive::is_archive(&arg) {
-            let mut files: Vec<PathBuf> = crate::archive::images(&arg)?.into_iter().map(|name| arg.join(name)).collect();
+            let mut files: Vec<PathBuf> = crate::archive::images(&arg)?
+                .into_iter()
+                .filter(|name| !skip_hidden || !name.split('/').any(|part| part.starts_with('.')))
+                .map(|name| arg.join(name))
+                .collect();
             files.sort_by(|a, b| natural_cmp(&a.to_string_lossy().to_lowercase(), &b.to_string_lossy().to_lowercase()));
             return (!files.is_empty()).then_some(FileList { files, index: 0 });
         }
@@ -35,7 +49,7 @@ impl FileList {
                 rd.filter_map(|e| e.ok())
                     .filter(|e| e.file_type().is_ok_and(|t| t.is_file() || t.is_symlink()))
                     .map(|e| e.path())
-                    .filter(|p| is_supported(p))
+                    .filter(|p| is_supported(p) && (!skip_hidden || !is_hidden(p)))
                     .collect()
             })
             .unwrap_or_default();
@@ -91,6 +105,21 @@ impl FileList {
         self.index = self.files.iter().position(|p| *p == current).unwrap_or(0);
     }
 
+    /// Lists the folder (or comic archive) of the current image again, staying on that image.
+    pub fn reload(&self) -> Option<FileList> {
+        let current = self.current();
+        let source = crate::archive::archive_of(current).unwrap_or_else(|| current.to_path_buf());
+        let mut list = FileList::new(&source)?;
+        if let Some(i) = list.files.iter().position(|p| p == current) {
+            list.index = i;
+        } else if source != current {
+            list.files.push(current.to_path_buf()); // hidden page that was being shown
+            list.files.sort_by(|a, b| natural_cmp(&a.to_string_lossy().to_lowercase(), &b.to_string_lossy().to_lowercase()));
+            list.index = list.files.iter().position(|p| p == current).unwrap_or(0);
+        }
+        Some(list)
+    }
+
     pub fn current(&self) -> &Path {
         &self.files[self.index]
     }
@@ -143,5 +172,22 @@ mod tests {
         let mut v = vec!["img10.png", "img2.png", "img1.png", "a.png", "img02.png"];
         v.sort_by(|a, b| natural_cmp(a, b));
         assert_eq!(v, ["a.png", "img1.png", "img2.png", "img02.png", "img10.png"]);
+    }
+
+    #[test]
+    fn hidden_images() {
+        let dir = std::env::temp_dir().join(format!("lumaris-test-hidden-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for f in ["a.png", ".b.png", "c.jpg"] {
+            std::fs::write(dir.join(f), b"").unwrap();
+        }
+        let names = |l: FileList| l.files.iter().map(|p| file_name(p.as_path())).collect::<Vec<_>>();
+        assert_eq!(names(FileList::list(&dir, true).unwrap()), ["a.png", "c.jpg"]);
+        assert_eq!(names(FileList::list(&dir, false).unwrap()), [".b.png", "a.png", "c.jpg"]);
+        // opened explicitly: shown even though hidden
+        let l = FileList::list(&dir.join(".b.png"), true).unwrap();
+        assert_eq!(file_name(l.current()), ".b.png");
+        assert_eq!(l.files.len(), 3);
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
