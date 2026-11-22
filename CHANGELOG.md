@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fixed: dark fringes along transparent edges when zoomed (pixel art outlines, smooth zoom and
+  zooming out). Images are now held on the GPU with premultiplied alpha
 - Hidden images (name starting with a dot) are skipped while browsing; opening one directly still
   works. Setting: Navigation → Skip hidden images (on by default)
 - Follows changes in the folder: images added or removed by other programs appear and disappear
@@ -13,6 +15,8 @@
 - Memory limit for images decoded in advance (Advanced → Memory for decoded images, 1 GB)
 - The opened image starts decoding before its folder is listed (faster start in large folders)
 - Faster sorting of large folders
+- JPEG: decoded straight to RGBA, and on all cores at once when the file has restart markers at
+  the end of rows (a 119 megapixel image: 370 ms to 50 ms)
 - More file type names in the desktop entry (BMP, ICO, TGA, PSD, camera RAW variants), so file
   managers offer Lumaris for them
 

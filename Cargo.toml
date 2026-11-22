@@ -32,6 +32,8 @@ xcf = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts", "memmap-fonts", "raster-images"] }
 libheif-rs = { version = "2", default-features = false, features = ["v1_17"] }
+zune-jpeg = "0.5"
+zune-core = "0.5"
 jxl-oxide = { version = "0.12", default-features = false, features = ["image", "rayon"] }
 
 [profile.release]

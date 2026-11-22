@@ -11,6 +11,7 @@ mod files;
 mod gpu;
 mod info;
 mod instance;
+mod jpeg;
 mod keys;
 mod kwin;
 mod menu;

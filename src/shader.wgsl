@@ -1,4 +1,4 @@
-// Draws the image quad. Filter by zoom:
+// Draws the image quad. The image texture holds premultiplied alpha. Filter by zoom:
 //   mode 0: reduction - trilinear from box filtered mipmaps
 //   mode 1: enlargement - Catmull-Rom bicubic (9 bilinear taps)
 //   mode 2: pixel art enlargement - sharp bilinear (square pixels, antialiased edges)
@@ -69,7 +69,9 @@ fn bicubic(uv: vec2<f32>) -> vec4<f32> {
     r += textureSampleLevel(tex, s_lin, vec2(t0.x, t3.y), 0.0) * w0.x * w3.y;
     r += textureSampleLevel(tex, s_lin, vec2(t12.x, t3.y), 0.0) * w12.x * w3.y;
     r += textureSampleLevel(tex, s_lin, vec2(t3.x, t3.y), 0.0) * w3.x * w3.y;
-    return clamp(r, vec4(0.0), vec4(1.0));
+    // the bicubic overshoot may not make a colour brighter than its coverage allows
+    let a = clamp(r.a, 0.0, 1.0);
+    return vec4(clamp(r.rgb, vec3(0.0), vec3(a)), a);
 }
 
 // Square pixels: each image pixel is drawn in one colour; only the last screen pixel at its
@@ -104,7 +106,7 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
         let q = floor(in.pos.xy / u.checker);
         let light = (i32(q.x) + i32(q.y)) % 2 == 0;
         let chk = select(vec3(0.4), vec3(0.6), light);
-        return vec4(mix(chk, c.rgb, c.a), 1.0) * u.alpha;
+        return vec4(chk * (1.0 - c.a) + c.rgb, 1.0) * u.alpha;
     }
-    return vec4(c.rgb * c.a, c.a) * u.alpha;
+    return c * u.alpha;
 }

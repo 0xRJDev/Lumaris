@@ -81,6 +81,9 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
 
 /// An image in memory (pages of archives)
 fn decode_bytes(bytes: &[u8]) -> Result<Decoded, String> {
+    if let Some(d) = decode_jpeg(bytes) {
+        return d;
+    }
     let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
     reader.no_limits();
     let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
@@ -109,6 +112,11 @@ fn decode_image(path: &Path) -> Result<Decoded, String> {
                 return animation(dec);
             }
         }
+        Some(image::ImageFormat::Jpeg) => {
+            if let Some(d) = decode_jpeg(&std::fs::read(path).map_err(|e| e.to_string())?) {
+                return d;
+            }
+        }
         Some(image::ImageFormat::Png) => {
             let dec = image::codecs::png::PngDecoder::new(open(path)?).map_err(|e| e.to_string())?;
             if dec.is_apng().unwrap_or(false) {
@@ -131,6 +139,27 @@ fn decode_image(path: &Path) -> Result<Decoded, String> {
         to_srgb(&icc, &mut d.rgba);
     }
     Ok(d)
+}
+
+/// Colour JPEGs: decoded straight to RGBA, in parallel bands where the file allows it
+/// (crate::jpeg). None: another kind of JPEG, for the general decoder.
+fn decode_jpeg(bytes: &[u8]) -> Option<Result<Decoded, String>> {
+    if bytes.get(..3)? != [0xFF, 0xD8, 0xFF] {
+        return None;
+    }
+    // orientation and colour profile (headers only)
+    let mut header = image::codecs::jpeg::JpegDecoder::new(std::io::Cursor::new(bytes)).ok()?;
+    let orientation = header.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let icc = if crate::settings::current().bool("ColourProfiles") { header.icc_profile().ok().flatten() } else { None };
+    drop(header);
+    let (w, h, rgba) = crate::jpeg::decode(bytes)?;
+    let mut img = DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, rgba)?);
+    img.apply_orientation(orientation);
+    let mut d = Decoded::raster(img);
+    if let Some(icc) = icc {
+        to_srgb(&icc, &mut d.rgba);
+    }
+    Some(Ok(d))
 }
 
 /// Linear light (HDR) to 8 bit sRGB: a soft shoulder keeps highlights instead of clipping them.

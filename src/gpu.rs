@@ -108,6 +108,7 @@ pub struct Renderer {
     config: wgpu::SurfaceConfiguration,
     pipeline: wgpu::RenderPipeline,
     mip_pipeline: wgpu::RenderPipeline,
+    premultiply_pipeline: wgpu::RenderPipeline,
     layout: wgpu::BindGroupLayout,
     mip_layout: wgpu::BindGroupLayout,
     uniforms: wgpu::Buffer,
@@ -207,6 +208,16 @@ impl Renderer {
             false,
         );
 
+        let premultiply_pipeline = make_pipeline(
+            device,
+            &mip_layout,
+            wgpu::include_wgsl!("mip.wgsl"),
+            "vs_full",
+            "fs_premultiply",
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        );
+
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
             size: std::mem::size_of::<Uniforms>() as u64,
@@ -239,6 +250,7 @@ impl Renderer {
             config,
             pipeline,
             mip_pipeline,
+            premultiply_pipeline,
             layout,
             mip_layout,
             uniforms,
@@ -321,18 +333,7 @@ impl Renderer {
         if rgba.len() != (img.tex_w * img.tex_h * 4) as usize {
             return;
         }
-        let size = wgpu::Extent3d { width: img.tex_w, height: img.tex_h, depth_or_array_layers: 1 };
-        self.gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo {
-                texture: &img.texture,
-                mip_level: 0,
-                origin: wgpu::Origin3d::ZERO,
-                aspect: wgpu::TextureAspect::All,
-            },
-            rgba,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * img.tex_w), rows_per_image: Some(img.tex_h) },
-            size,
-        );
+        self.write_pixels(&img.texture, img.tex_w, img.tex_h, rgba);
         self.generate_mips(&img.texture, img.mips);
     }
 
@@ -364,12 +365,7 @@ impl Renderer {
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::RENDER_ATTACHMENT,
             view_formats: &[],
         });
-        self.gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
-            pixels,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
-            size,
-        );
+        self.write_pixels(&texture, w, h, pixels);
         self.generate_mips(&texture, mips);
         let view = texture.create_view(&Default::default());
         let bind_group = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -396,6 +392,55 @@ impl Renderer {
     /// Pixel size of the current image texture
     pub fn texture_size(&self) -> Option<(u32, u32)> {
         self.image.as_ref().map(|i| (i.tex_w, i.tex_h))
+    }
+
+    /// Writes straight alpha RGBA pixels to level 0 of an image texture as premultiplied alpha
+    /// (through a texture of the same size, converted on the GPU).
+    fn write_pixels(&self, texture: &wgpu::Texture, w: u32, h: u32, pixels: &[u8]) {
+        let device = &self.gpu.device;
+        let size = wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 };
+        let upload = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("upload"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &upload, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            pixels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
+            size,
+        );
+        let src = upload.create_view(&Default::default());
+        let dst = texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: 0, mip_level_count: Some(1), ..Default::default() });
+        let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &self.mip_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&src) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.nearest) },
+            ],
+        });
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &dst,
+                    resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                })],
+                ..Default::default()
+            });
+            pass.set_pipeline(&self.premultiply_pipeline);
+            pass.set_bind_group(0, &bind, &[]);
+            pass.draw(0..3, 0..1);
+        }
+        self.gpu.queue.submit([encoder.finish()]);
     }
 
     fn generate_mips(&self, texture: &wgpu::Texture, mips: u32) {
