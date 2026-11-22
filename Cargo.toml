@@ -19,6 +19,7 @@ bytemuck = { version = "1", features = ["derive"] }
 wayland-client = "0.31"
 wayland-backend = { version = "0.3", features = ["client_system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
+wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wayland-protocols-plasma = { version = "0.3", features = ["client"] }
 zbus = { version = "5", default-features = false, features = ["blocking-api", "async-io"] }
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "gif", "webp", "bmp", "tiff", "qoi", "ico", "tga", "pnm", "avif-native", "exr", "hdr", "dds", "ff", "rayon"] }

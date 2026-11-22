@@ -1882,6 +1882,7 @@ dependencies = [
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-plasma",
+ "wayland-protocols-wlr",
  "wgpu",
  "winit",
  "xcf",

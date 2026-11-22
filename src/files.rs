@@ -22,9 +22,15 @@ pub struct FileList {
 }
 
 impl FileList {
-    /// `arg` is an image (its folder is listed) or a folder (starts at its first image).
+    /// `arg` is an image (its folder is listed), a folder (starts at its first image) or a
+    /// comic archive (.cbz/.zip: its images, as if it were a folder).
     pub fn new(arg: &Path) -> Option<FileList> {
         let arg = std::fs::canonicalize(arg).ok()?;
+        if crate::archive::is_archive(&arg) {
+            let mut files: Vec<PathBuf> = crate::archive::images(&arg)?.into_iter().map(|name| arg.join(name)).collect();
+            files.sort_by(|a, b| natural_cmp(&a.to_string_lossy().to_lowercase(), &b.to_string_lossy().to_lowercase()));
+            return (!files.is_empty()).then_some(FileList { files, index: 0 });
+        }
         let (dir, start) = if arg.is_dir() { (arg.clone(), None) } else { (arg.parent()?.to_path_buf(), Some(arg)) };
         let mut files: Vec<PathBuf> = std::fs::read_dir(&dir)
             .map(|rd| {

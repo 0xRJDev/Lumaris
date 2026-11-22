@@ -42,6 +42,11 @@ impl View {
         if self.enlarge { z } else { z.min(1.0).max(self.min_fit.min(z)) }
     }
 
+    /// The zoom being glided to
+    pub fn target_zoom(&self) -> f64 {
+        self.target
+    }
+
     pub fn set_min_fit_zoom(&mut self, z: f64) {
         self.min_fit = z;
     }

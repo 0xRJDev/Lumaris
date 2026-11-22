@@ -14,8 +14,11 @@ A lean and fast image viewer for Linux, written in Rust.
 - Filters: bicubic when enlarging, mipmaps when reducing, sharp square pixels for pixel art
   (images up to 256 px), exact pixels at 100%
 - Next / previous image of the folder in natural order (looping); neighbours are decoded in advance
+- Comic archives (.cbz / .zip): the pages are shown like the images of a folder
+- The zoom is shown for a moment while zooming
 - Slideshow (keys 1 to 9: seconds per image)
-- Right-click menu in the desktop's style (KDE font and colours): open with the applications
+- Right-click menu in the desktop's style (KDE font and colours), which can extend beyond the
+  window (Wayland layer surfaces): open with the applications
   associated with the file type (default first), open the containing folder, copy the image or
   its path, navigation, slideshow, zoom, full screen
 - Image info box (key I): file, folder, size, format, dates and camera details (EXIF)

@@ -54,6 +54,12 @@ pub const RAW_EXTENSIONS: &[&str] = &[
 ];
 
 pub fn decode(path: &Path) -> Result<Decoded, String> {
+    // a page of a comic archive
+    if !path.exists() {
+        if let Some(bytes) = crate::archive::read(path) {
+            return decode_bytes(&bytes?);
+        }
+    }
     match extension(path).as_str() {
         "svg" | "svgz" => decode_svg(path),
         "heic" | "heif" | "hif" => decode_heif(path),
@@ -69,6 +75,17 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
         }
         _ => decode_image(path),
     }
+}
+
+/// An image in memory (pages of archives)
+fn decode_bytes(bytes: &[u8]) -> Result<Decoded, String> {
+    let mut reader = ImageReader::new(std::io::Cursor::new(bytes)).with_guessed_format().map_err(|e| e.to_string())?;
+    reader.no_limits();
+    let mut decoder = reader.into_decoder().map_err(|e| e.to_string())?;
+    let orientation = decoder.orientation().unwrap_or(image::metadata::Orientation::NoTransforms);
+    let mut img = DynamicImage::from_decoder(decoder).map_err(|e| e.to_string())?;
+    img.apply_orientation(orientation);
+    Ok(Decoded::raster(img))
 }
 
 fn open(path: &Path) -> Result<BufReader<std::fs::File>, String> {

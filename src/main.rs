@@ -1,6 +1,7 @@
 // Lumaris - lean and fast image viewer for Linux
 // SPDX-License-Identifier: GPL-2.0-or-later
 mod apps;
+mod archive;
 mod blur;
 mod commands;
 mod decode;
@@ -19,6 +20,7 @@ mod portal;
 mod raw;
 mod settings;
 mod settings_ui;
+mod toast;
 mod trash;
 mod ui;
 mod view;
@@ -110,6 +112,9 @@ struct App {
     zoom_in_place: bool,
     /// menus on popup surfaces, so they can extend beyond the window (Wayland)
     popups: Option<popup::Popups>,
+    /// the zoom shown briefly while zooming
+    toast: toast::Toast,
+    toast_zoom: f64,
     info: Option<info::InfoBox>,
     info_zoom: f64,
     help: Option<info::InfoBox>,
@@ -225,7 +230,11 @@ impl App {
     }
 
     fn title_for(path: &Path, suffix: &str) -> String {
-        let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        let mut name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        if let Some(a) = archive::archive_of(path) {
+            // a page of a comic archive: "comic.cbz › page.jpg"
+            name = format!("{} › {name}", a.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        }
         format!("{name}{suffix} - Lumaris")
     }
 
@@ -293,6 +302,12 @@ impl App {
             return;
         }
         let path = self.files.current().to_path_buf();
+        if archive::archive_of(&path).is_some() {
+            if let Some(w) = &self.window {
+                w.set_title(&Self::title_for(&path, " (pages of an archive cannot be moved to the trash)"));
+            }
+            return;
+        }
         match trash::trash(&path) {
             Ok(()) => {
                 self.cache.retain(|(p, _)| *p != path);
@@ -800,11 +815,13 @@ impl App {
         let s = window.inner_size();
         if let (Some(_), Some(f)) = (self.popups.as_ref(), self.kwin.as_ref().and_then(|k| k.frame())) {
             if window.fullscreen().is_none() {
+                // a few pixels inside the screen edges (KWin centres layer surfaces that touch them)
+                let e = 4.0;
                 let b = (
-                    (-f.client.0 as f64 * scale) as f32,
-                    (-f.client.1 as f64 * scale) as f32,
-                    ((f.area.0 - f.client.0) as f64 * scale) as f32,
-                    ((f.area.1 - f.client.1) as f64 * scale) as f32,
+                    ((-f.client.0 as f64 + e) * scale) as f32,
+                    ((-f.client.1 as f64 + e) * scale) as f32,
+                    (((f.area.0 - f.client.0) as f64 - e) * scale) as f32,
+                    (((f.area.1 - f.client.1) as f64 - e) * scale) as f32,
                 );
                 self.menu = Some(menu::Menu::open_in(items, at, (s.width, s.height), b, scale));
                 self.sync_overlays();
@@ -869,7 +886,7 @@ impl App {
             }
         }
         let show_nav = self.navigation_panel && self.settings_panel.is_none();
-        let App { renderer, menu, settings_panel, info, help, nav, .. } = self;
+        let App { renderer, menu, settings_panel, info, help, nav, toast, .. } = self;
         if let Some(r) = renderer.as_mut() {
             let mut layers = Vec::new();
             if let Some(i) = info.as_mut() {
@@ -877,6 +894,9 @@ impl App {
             }
             if show_nav {
                 layers.extend(nav.layers());
+            }
+            if let Some(t) = toast.layer(size) {
+                layers.push(t);
             }
             if let Some(h) = help.as_mut() {
                 layers.extend(h.layer(size));
@@ -887,8 +907,9 @@ impl App {
             let on_popups = self.popups.is_some() && menu.as_ref().is_some_and(|m| m.on_popups());
             if let Some(m) = menu.as_mut() {
                 if on_popups {
+                    let client = self.kwin.as_ref().and_then(|k| k.frame()).map(|f| f.client).unwrap_or((0, 0));
                     if let Some(p) = self.popups.as_mut() {
-                        p.show(&m.layers(), scale);
+                        p.show(&m.layers(), scale, client);
                     }
                 } else {
                     layers.extend(m.layers());
@@ -1134,10 +1155,10 @@ impl ApplicationHandler<UserEvent> for App {
             }
         }
         self.next_animation_frame();
-        if self.nav.expire() {
+        if self.nav.expire() | self.toast.expire() {
             self.sync_overlays();
         }
-        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due), self.nav.deadline()].into_iter().flatten().min();
+        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due), self.nav.deadline(), self.toast.deadline()].into_iter().flatten().min();
         match next {
             Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -1290,11 +1311,28 @@ impl ApplicationHandler<UserEvent> for App {
                     r.resize(s.width, s.height);
                 }
                 self.view.resize(s.width, s.height);
+                // panels placed relative to the window size
+                if self.help.is_some() || self.toast.deadline().is_some() || self.navigation_panel {
+                    self.sync_overlays();
+                }
                 self.redraw();
             }
             WindowEvent::RedrawRequested => {
                 let animating = self.view.step(Instant::now());
                 self.follow_zoom(event_loop);
+                // the zoom while zooming (not for fitting a new image)
+                let target = self.view.target_zoom();
+                if (target - self.toast_zoom).abs() > 1e-9 {
+                    let user = !self.view.is_fit() && self.toast_zoom > 0.0;
+                    self.toast_zoom = target;
+                    if user {
+                        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+                        let pct = target * 100.0;
+                        let text = if pct < 10.0 { format!("{pct:.1}%") } else { format!("{pct:.0}%") };
+                        self.toast.show(text, scale);
+                        self.sync_overlays();
+                    }
+                }
                 // zoom map follows zoom and panning
                 if self.navigation_panel {
                     let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
@@ -1572,6 +1610,8 @@ fn main() {
         size_before_menu: None,
         zoom_in_place: false,
         popups: None,
+        toast: toast::Toast::new(),
+        toast_zoom: 0.0,
         info: None,
         info_zoom: 0.0,
         help: None,
