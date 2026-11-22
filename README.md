@@ -13,6 +13,7 @@
 <a href="#desktops"><img src="docs/assets/button-desktops.png" alt="Desktops" width="128"></a>
 <a href="#build"><img src="docs/assets/button-build.png" alt="Build" width="128"></a>
 <a href="CHANGELOG.md"><img src="docs/assets/button-news.png" alt="What's new" width="128"></a>
+<a href="https://ko-fi.com/shikify"><img src="docs/assets/button-support.png" alt="Support on Ko-fi" width="128"></a>
 
 </div>
 
@@ -155,6 +156,10 @@ one command per line: `wheel <steps> <x> <y>`, `key <name>`, `rclick` / `lclick`
 <br>
 
 **[Report a bug or share an idea](https://github.com/0xRJDev/Lumaris/issues)**
+
+☕ **[Tip jar: buy me a coffee](https://ko-fi.com/shikify)** ☕
+
+<sub>Lumaris is free and always will be.</sub>
 
 <sub>Lumaris is free software under the [GNU GPL, version 2 or later](LICENSE).</sub>
 

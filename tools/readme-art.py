@@ -123,7 +123,7 @@ if __name__ == "__main__":
     render("title-card.png", title_card(icon_href()), 1370)
     shadows = [MINT, GOLD]
     for i, (name, label) in enumerate([("install", "INSTALL"), ("features", "FEATURES"), ("keys", "KEYS"), ("settings", "SETTINGS"),
-                                       ("desktops", "DESKTOPS"), ("build", "BUILD"), ("news", "WHAT'S NEW")]):
+                                       ("desktops", "DESKTOPS"), ("build", "BUILD"), ("news", "WHAT'S NEW"), ("support", "SUPPORT")]):
         render(f"button-{name}.png", button(label, shadows[i % 2]), 325)
     for name, title, sub, accent in [
         ("install", "Install", "Up and running in a minute.", MINT),
