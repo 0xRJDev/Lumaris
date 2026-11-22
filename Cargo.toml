@@ -6,7 +6,7 @@ description = "Lean and fast image viewer for Linux"
 license = "GPL-2.0-or-later"
 repository = "https://github.com/0xRJDev/Lumaris"
 readme = "README.md"
-rust-version = "1.85"
+rust-version = "1.88"
 keywords = ["image-viewer", "wayland", "kde", "gpu", "viewer"]
 categories = ["multimedia::images", "graphics"]
 

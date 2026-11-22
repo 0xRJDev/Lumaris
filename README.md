@@ -34,7 +34,7 @@ your image, with the blurred desktop behind it.
 cd packaging/aur && makepkg -si
 ```
 
-**Anywhere else:** build it from source (needs Rust 1.85 or newer and the libraries listed under
+**Anywhere else:** build it from source (needs Rust 1.88 or newer and the libraries listed under
 [Build](#build)):
 
 ```sh
