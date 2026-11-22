@@ -1,128 +1,161 @@
-<p align="center"><img src="packaging/lumaris.svg" width="128" alt=""></p>
+<div align="center">
+
+<img src="packaging/lumaris.svg" alt="" width="112">
 
 # Lumaris
 
-A lean and fast image viewer for Linux, written in Rust. It opens in about a tenth of a second,
-draws on the GPU and stays out of the way: no toolbar, no editing, just the image.
+**A lean and fast image viewer for Linux**
 
-Made for KDE Plasma on Wayland, where it looks and behaves like part of the desktop; it also runs
-on other Wayland desktops and X11 with fewer niceties (see [Desktops](#desktops)).
+<sub>Written in Rust • Drawn on the GPU • Made for KDE Plasma on Wayland</sub>
 
-![Lumaris with the image info and the right-click menu open](docs/screenshot.png)
+[Install](#install) • [Features](#features) • [Keys](#keys) • [Settings](#settings) • [Desktops](#desktops) • [Build](#build) • [What's new](CHANGELOG.md)
 
-## Features
+</div>
 
-**Viewing**
-- GPU drawing (Vulkan, OpenGL fallback): bicubic when enlarging, smooth mipmaps when reducing,
-  sharp square pixels for pixel art, exact pixels at 100%
-- Smooth zoom around the mouse pointer; the window grows and shrinks with the image (Shift+wheel
-  zooms only the image), the zoom is shown for a moment
-- The window opens centred and fitted to the image; small images open enlarged
-- Transparent window with the blurred desktop behind it, or a solid colour or checkerboard
-- Rotate and flip the view, full screen, navigation panel with a zoom map, image info with EXIF
-  camera details and a histogram
+<p align="center"><img src="docs/screenshot.png" alt="Lumaris with the image info and the right-click menu open" width="100%"></p>
 
-**Browsing**
-- Next / previous image of the folder in natural order (`img2` before `img10`), looping; the
-  neighbours are decoded in advance
-- Sort by name, date, size or randomly; slideshow (keys 1 to 9 = seconds per image) with fades
-- Comic archives (.cbz / .zip) open like a folder of their pages
-- Open dialog, drag and drop, single window mode
+Lumaris opens in about a tenth of a second and stays out of the way: no toolbar, no editing, just
+your image, with the blurred desktop behind it.
 
-**Files and desktop**
-- Right-click menu in the desktop's style (KDE font and colours), also beyond the window
-- Open with the applications associated with the file type (your default first), open the
-  containing folder, copy the image or its path, move to the trash
-- Your own commands in the menu and on keys
+> [!NOTE]
+> **Made and tested on KDE Plasma 6 (Wayland).** It runs on other Wayland desktops and on X11 too,
+> with a few niceties missing; see [Desktops](#desktops).
 
-**Formats**
-JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW, EXR and
-Radiance HDR (tone mapped), PSD/PSB, GIMP XCF, Krita, OpenRaster, JPEG 2000, PDF (first page),
-TIFF, BMP, QOI, ICO, TGA, PNM, DDS, farbfeld. Animated GIF, WebP and PNG play. Embedded colour
-profiles are applied.
+## <a name="install"></a>Install
+<sub>Up and running in a minute.</sub>
 
-**Privacy**
-Lumaris keeps no history, thumbnails or recent files. The only file it writes is your settings.
-
-## Install
-
-### Arch Linux
-
-A PKGBUILD is in `packaging/aur/` (`lumaris-git`):
+**Arch Linux:** a PKGBUILD (`lumaris-git`) is in `packaging/aur/`:
 
 ```sh
 cd packaging/aur && makepkg -si
 ```
 
-### From source
-
-Needs Rust 1.85 or newer and these libraries (Arch package names):
-
-| | Packages |
-|---|---|
-| Required | `libheif` `libraw` `dav1d` `lcms2` `fontconfig` `wayland` `libxkbcommon`, a Vulkan or OpenGL driver |
-| Recommended | `wl-clipboard` (copying on Wayland), `xdg-desktop-portal` (open dialog) |
-| Optional | `poppler` (PDF), `xclip` (copying on X11), `kdialog` or `zenity` (open dialog without a portal) |
+**Anywhere else:** build it from source (needs Rust 1.85 or newer and the libraries listed under
+[Build](#build)):
 
 ```sh
 ./install.sh                 # builds and installs to ~/.local (program, desktop entry, icon)
 lumaris <image or folder>
 ```
 
-`sudo PREFIX=/usr/local ./install.sh` installs system wide. To make Lumaris the default image
-viewer, choose it in System Settings > Default Applications.
+`sudo PREFIX=/usr/local ./install.sh` installs system wide. To open your images with Lumaris,
+choose it in **System Settings → Default Applications**.
 
-## Keys
+## <a name="features"></a>Features
+<sub>Everything a viewer needs, nothing it doesn't.</sub>
 
-Press F1 in Lumaris for the full list. All keys can be changed (Settings > Edit key bindings).
+- **Smooth, sharp zoom:** zooms around the mouse pointer, with bicubic enlargement, smooth
+  reduction, square pixels for pixel art and SVGs that stay sharp at any size.
+- **A window that fits:** opens centred and sized to the image, then grows and shrinks with your
+  zoom (Shift+wheel zooms just the image).
+- **Part of the desktop:** see-through window with the blurred desktop behind it, and a right-click
+  menu in your KDE colours and font that can reach beyond the window.
+- **Browsing:** next and previous in natural order (`img2` before `img10`), sort orders, looping,
+  slideshows with fades, and comic archives (.cbz) that open like a folder.
+- **Desktop tools:** open with your apps (default first), open the folder, copy the image or its
+  path, move to the trash, drag and drop, and your own commands on keys.
+- **Details on demand:** image info with camera details and a histogram, a navigation panel with a
+  zoom map, rotate and flip.
+- **Private by design:** no history, no thumbnails, no recent files. The only thing it writes is
+  your settings.
+
+<details>
+<summary><b>Formats</b></summary>
+
+JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG, camera RAW, EXR and Radiance HDR (tone
+mapped), PSD/PSB, GIMP XCF, Krita, OpenRaster, JPEG 2000, PDF (first page), TIFF, BMP, QOI, ICO,
+TGA, PNM, DDS and farbfeld. Animated GIF, WebP and PNG play, and embedded colour profiles are
+applied.
+
+</details>
+
+## <a name="keys"></a>Keys
+<sub>Press F1 in Lumaris for all of them. Every key can be changed.</sub>
 
 | Key | Action |
 |---|---|
-| Right, Page Down / Left, Page Up, Backspace | Next / previous image |
-| Mouse wheel, + / - | Zoom around the pointer (Shift+wheel: the window keeps its size) |
-| Space / Enter / 0 | Fit or 100% / fit / 100% |
-| Up, Down, Ctrl+Left, Ctrl+Right | Move the image when zoomed in |
-| R / Shift+R, H / V | Rotate right / left, flip horizontally / vertically |
+| Right / Left | Next / previous image |
+| Mouse wheel, + / - | Zoom (Shift+wheel: the window keeps its size) |
+| Space / Enter | Fit or 100% / fit to window |
 | 1 to 9 | Slideshow, 1 to 9 seconds per image |
+| R, H, V | Rotate, flip horizontally, flip vertically |
 | Ctrl+C / Ctrl+Shift+C | Copy the image / its file path |
-| Ctrl+O, Delete | Open image, move to trash |
 | I, N, F1, Ctrl+, | Image info, navigation panel, keys, settings |
-| F11, F, double click | Full screen |
+| F11, double click | Full screen |
 | Esc | Close a panel, stop the slideshow, leave full screen, quit |
 
-## Settings
+<details>
+<summary><b>All keys</b></summary>
 
-Right-click > Settings (or Ctrl+,) changes everything that can be set; changes apply at once.
-The files, all in `~/.config/lumaris/`, can also be edited by hand:
-
-| File | Contents |
+| Key | Action |
 |---|---|
-| `lumaris.conf` | Settings, with an explanation of each one |
-| `keys.conf` | Key bindings |
-| `commands.conf` | Your own commands: `Name \| Key \| Command`, `%f` = the image, `%d` = its folder |
+| Page Down / Page Up, Backspace | Next / previous image |
+| Home / End | First / last image |
+| 0 | Original size (100%) |
+| Up, Down, Ctrl+Left, Ctrl+Right | Move the image when zoomed in |
+| Shift+R | Rotate left |
+| F | Full screen |
+| Ctrl+O | Open image |
+| Ctrl+E | Open the containing folder |
+| Delete | Move to trash |
+| Ctrl+Q | Quit |
+| Mouse back / forward | Previous / next image |
 
-## Desktops
+</details>
+
+## <a name="settings"></a>Settings
+<sub>Right-click → Settings, or Ctrl+,. Changes apply at once.</sub>
+
+Everything is also in plain text files in `~/.config/lumaris/`, if you prefer an editor:
+
+| File | What's in it |
+|---|---|
+| `lumaris.conf` | All settings, each with a short explanation |
+| `keys.conf` | Key bindings |
+| `commands.conf` | Your own commands: `Name \| Key \| Command`, where `%f` is the image and `%d` its folder |
+
+## <a name="desktops"></a>Desktops
+<sub>Where everything works, and where some of it doesn't.</sub>
 
 | | KDE Plasma (Wayland) | Other Wayland desktops | X11 |
 |---|---|---|---|
-| Blurred background | Yes | Where the compositor offers it | No (see-through or solid) |
-| Window opens centred, follows the zoom centred | Yes | The compositor places the window | The window manager places it |
-| Menus beyond the window | Yes | With the layer shell (wlroots based) | Inside the window |
+| Blurred background | ✓ | Where the compositor offers it | See-through or solid |
+| Centred window that follows the zoom | ✓ | Placed by the compositor | Placed by the window manager |
+| Menus beyond the window | ✓ | With the layer shell (wlroots based) | Inside the window |
 
-Tested on KDE Plasma 6 (Wayland) with NVIDIA. Not tested yet: other desktops, X11, fractional
-display scaling (125%, 150%), several monitors. Reports are welcome.
+Not tested yet: other desktops, X11, fractional scaling (125%, 150%) and several monitors.
+[Reports are welcome](https://github.com/0xRJDev/Lumaris/issues).
 
-## Building and testing
+## <a name="build"></a>Build
+<sub>For those who like to compile things.</sub>
+
+| | Packages (Arch names) |
+|---|---|
+| Required | `libheif` `libraw` `dav1d` `lcms2` `fontconfig` `wayland` `libxkbcommon`, a Vulkan or OpenGL driver |
+| Recommended | `wl-clipboard` (copying), `xdg-desktop-portal` (open dialog) |
+| Optional | `poppler` (PDF), `xclip` (copying on X11), `kdialog` or `zenity` (open dialog without a portal) |
 
 ```sh
 cargo build --release
 cargo test
 ```
 
-`LUMARIS_DEBUG_TIMING=1` prints startup timings. `LUMARIS_AUTOTEST=<file>` runs a test script
-(one command per line: `wheel <steps> <x> <y>`, `key <name>`, `rclick` / `lclick` / `move <x> <y>`,
-`settings`, `info`, `wait <ms>`, `quit`), used to test Lumaris in a nested, hidden KWin.
+<details>
+<summary><b>Testing and debugging</b></summary>
 
-## License
+`LUMARIS_DEBUG_TIMING=1` prints startup timings. `LUMARIS_AUTOTEST=<file>` runs a test script,
+one command per line: `wheel <steps> <x> <y>`, `key <name>`, `rclick` / `lclick` / `move <x> <y>`,
+`settings`, `info`, `wait <ms>`, `quit`. It is used to test Lumaris in a hidden, nested KWin, and
+`examples/fakeclick` sends real pointer clicks there.
 
-GNU General Public License, version 2 or later (see `LICENSE`).
+</details>
+
+<div align="center">
+
+<br>
+
+**[Report a bug or share an idea](https://github.com/0xRJDev/Lumaris/issues)**
+
+<sub>Lumaris is free software under the [GNU GPL, version 2 or later](LICENSE).</sub>
+
+</div>
