@@ -571,19 +571,46 @@ impl App {
         self.sync_overlays();
     }
 
+    /// Where panels may be shown beyond the window (popup surfaces): the usable screen area in
+    /// window coordinates, a few pixels inside its edges. None: inside the window only.
+    fn screen_bounds(&self) -> Option<(f32, f32, f32, f32)> {
+        let window = self.window.as_ref()?;
+        self.popups.as_ref()?;
+        if window.fullscreen().is_some() {
+            return None;
+        }
+        let f = self.kwin.as_ref()?.frame()?;
+        let (scale, e) = (window.scale_factor(), 4.0); // KWin centres layer surfaces that touch the edges
+        Some((
+            ((-f.client.0 as f64 + e) * scale) as f32,
+            ((-f.client.1 as f64 + e) * scale) as f32,
+            (((f.area.0 - f.client.0) as f64 - e) * scale) as f32,
+            (((f.area.1 - f.client.1) as f64 - e) * scale) as f32,
+        ))
+    }
+
+    /// Area of the settings window: the screen around the window, or the window itself
+    fn settings_bounds(&self) -> (f32, f32, f32, f32) {
+        let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
+        self.screen_bounds().unwrap_or((0.0, 0.0, s.width as f32, s.height as f32))
+    }
+
     fn open_settings(&mut self) {
         self.close_menu();
         let Some(window) = self.window.clone() else { return };
         let scale = window.scale_factor();
         let (ww, wh) = settings_ui::SettingsPanel::wanted_size(scale);
         let s = window.inner_size();
-        if self.windowed().is_some() && (s.width < ww || s.height < wh) {
+        // shown beyond the window when possible; otherwise a small window grows while it is open
+        if self.screen_bounds().is_none() && self.windowed().is_some() && (s.width < ww || s.height < wh) {
             self.size_before_settings = Some(s);
             self.apply_window_size(PhysicalSize::new(s.width.max(ww), s.height.max(wh)));
         }
         let s = window.inner_size();
         let user_keys = self.user_commands.iter().map(|c| (c.name.clone(), c.key.clone())).collect();
-        self.settings_panel = Some(settings_ui::SettingsPanel::new(settings::current().clone(), user_keys, (s.width, s.height), scale));
+        let bounds = self.settings_bounds();
+        self.settings_panel =
+            Some(settings_ui::SettingsPanel::new(settings::current().clone(), user_keys, (s.width, s.height), bounds, scale));
         self.sync_overlays();
     }
 
@@ -935,17 +962,7 @@ impl App {
         // menus on popup surfaces may use the whole screen area around the window
         let scale = window.scale_factor();
         let s = window.inner_size();
-        if let (Some(_), Some(f)) = (self.popups.as_ref(), self.kwin.as_ref().and_then(|k| k.frame()))
-            && window.fullscreen().is_none()
-        {
-            // a few pixels inside the screen edges (KWin centres layer surfaces that touch them)
-            let e = 4.0;
-            let b = (
-                ((-f.client.0 as f64 + e) * scale) as f32,
-                ((-f.client.1 as f64 + e) * scale) as f32,
-                (((f.area.0 - f.client.0) as f64 - e) * scale) as f32,
-                (((f.area.1 - f.client.1) as f64 - e) * scale) as f32,
-            );
+        if let Some(b) = self.screen_bounds() {
             self.menu = Some(menu::Menu::open_in(items, at, (s.width, s.height), b, scale));
             self.sync_overlays();
             return;
@@ -1022,21 +1039,30 @@ impl App {
             if let Some(t) = toast.layer(size) {
                 layers.push(t);
             }
+            // the settings window and the menu are drawn on popup surfaces when they extend
+            // beyond the window, otherwise in it
+            let mut popup_layers = Vec::new();
             if let Some(p) = settings_panel.as_mut() {
-                layers.extend(p.layers());
+                if self.popups.is_some() && p.on_popups() {
+                    popup_layers.extend(p.layers());
+                } else {
+                    layers.extend(p.layers());
+                }
             }
-            let on_popups = self.popups.is_some() && menu.as_ref().is_some_and(|m| m.on_popups());
             if let Some(m) = menu.as_mut() {
-                if on_popups {
-                    let client = self.kwin.as_ref().and_then(|k| k.frame()).map(|f| f.client).unwrap_or((0, 0));
-                    if let Some(p) = self.popups.as_mut() {
-                        p.show(&m.layers(), scale, client);
-                    }
+                if self.popups.is_some() && m.on_popups() {
+                    popup_layers.extend(m.layers());
                 } else {
                     layers.extend(m.layers());
                 }
-            } else if let Some(p) = self.popups.as_mut() {
-                p.hide();
+            }
+            if let Some(p) = self.popups.as_mut() {
+                if popup_layers.is_empty() {
+                    p.hide();
+                } else {
+                    let client = self.kwin.as_ref().and_then(|k| k.frame()).map(|f| f.client).unwrap_or((0, 0));
+                    p.show(&popup_layers, scale, client);
+                }
             }
             r.set_overlays(&layers);
         }
@@ -1240,12 +1266,31 @@ impl App {
                 }
             }
             ["settings"] => self.open_settings(),
+            // input on popup surfaces, as the popup thread sends it (window coordinates)
+            ["pmove", x, y] | ["ppress", x, y] => {
+                let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) else { return };
+                self.user_event(event_loop, UserEvent::Popup(popup::PopupInput::Motion(x, y)));
+                if a[0] == "ppress" {
+                    self.user_event(event_loop, UserEvent::Popup(popup::PopupInput::Press(true)));
+                }
+            }
+            ["prelease"] => self.user_event(event_loop, UserEvent::Popup(popup::PopupInput::Release)),
             ["settingswheel", steps] => {
                 if let (Some(p), Ok(n)) = (self.settings_panel.as_mut(), steps.parse::<f64>())
                     && p.wheel(n)
                 {
                     self.sync_overlays();
                 }
+            }
+            ["settingsinfo"] => {
+                println!(
+                    "SETTINGS {} popups={:?} window={:?} frame={:?} next={:?}",
+                    self.settings_panel.as_ref().map(|p| p.describe()).unwrap_or_default(),
+                    self.popups.as_ref().map(|p| p.count()),
+                    self.window.as_ref().map(|w| w.inner_size()),
+                    self.kwin.as_ref().and_then(|k| k.frame()),
+                    keys::current().keys(keys::Command::Next)
+                );
             }
             ["menuinfo"] => {
                 println!(
@@ -1393,13 +1438,31 @@ impl ApplicationHandler<UserEvent> for App {
                 match input {
                     popup::PopupInput::Motion(x, y) => {
                         self.cursor = (x, y);
-                        if self.menu.as_mut().is_some_and(|m| m.hover((x, y))) {
+                        let changed = match self.menu.as_mut() {
+                            Some(m) => m.hover((x, y)),
+                            None => self.settings_panel.as_mut().is_some_and(|p| p.drag_to((x, y)) || p.hover((x, y))),
+                        };
+                        if changed {
                             self.sync_overlays();
                         }
                     }
                     popup::PopupInput::Press(left) => {
                         let at = self.cursor;
-                        self.menu_click(event_loop, at, !left);
+                        if self.menu.is_some() {
+                            self.menu_click(event_loop, at, !left);
+                        } else if left && !self.settings_panel.as_mut().is_some_and(|p| p.start_drag(at)) {
+                            self.settings_click(at);
+                        }
+                    }
+                    popup::PopupInput::Release => {
+                        if let Some(p) = self.settings_panel.as_mut() {
+                            p.end_drag();
+                        }
+                    }
+                    popup::PopupInput::Wheel(steps) => {
+                        if self.settings_panel.as_mut().is_some_and(|p| p.wheel(steps)) {
+                            self.sync_overlays();
+                        }
                     }
                 }
                 return;
@@ -1467,8 +1530,9 @@ impl ApplicationHandler<UserEvent> for App {
                     self.size_before_menu = None;
                     self.close_menu();
                 }
+                let bounds = self.settings_bounds();
                 if let Some(p) = self.settings_panel.as_mut() {
-                    p.resize((s.width, s.height));
+                    p.resize((s.width, s.height), bounds);
                     self.sync_overlays();
                 }
                 if let Some(r) = self.renderer.as_mut() {
@@ -1550,7 +1614,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 if let Some(p) = self.settings_panel.as_mut() {
                     self.cursor = (x, y);
-                    if p.hover((x, y)) {
+                    if p.drag_to((x, y)) || p.hover((x, y)) {
                         self.sync_overlays();
                     }
                     return;
@@ -1579,7 +1643,17 @@ impl ApplicationHandler<UserEvent> for App {
                 self.menu_click(event_loop, self.cursor, b == MouseButton::Right);
             }
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.settings_panel.is_some() => {
-                self.settings_click(self.cursor);
+                let at = self.cursor;
+                if !self.settings_panel.as_mut().is_some_and(|p| p.start_drag(at)) {
+                    self.settings_click(at);
+                }
+            }
+            WindowEvent::MouseInput { state: ElementState::Released, button: MouseButton::Left, .. }
+                if self.settings_panel.as_ref().is_some_and(|p| p.dragging()) =>
+            {
+                if let Some(p) = self.settings_panel.as_mut() {
+                    p.end_drag();
+                }
             }
             WindowEvent::MouseWheel { delta, .. } if self.settings_panel.is_some() => {
                 let steps = match delta {

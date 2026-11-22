@@ -56,7 +56,12 @@ pub struct SettingsPanel {
     section: usize,
     scale: f32,
     window: (f32, f32),
+    /// where the panel may be: the window, or the screen around it when it is shown on popup
+    /// surfaces (window coordinates: left, top, right, bottom)
+    bounds: (f32, f32, f32, f32),
     rect: (f32, f32, f32, f32),
+    /// dragged by its header: pointer position relative to the panel
+    drag: Option<(f32, f32)>,
     hits: Vec<(Hit, f32, f32, f32, f32)>,
     pixmap: Option<Pixmap>,
     /// open choice list: setting index and its menu
@@ -72,7 +77,13 @@ pub struct SettingsPanel {
 }
 
 impl SettingsPanel {
-    pub fn new(values: Settings, user_keys: Vec<(String, String)>, window: (u32, u32), scale: f64) -> SettingsPanel {
+    pub fn new(
+        values: Settings,
+        user_keys: Vec<(String, String)>,
+        window: (u32, u32),
+        bounds: (f32, f32, f32, f32),
+        scale: f64,
+    ) -> SettingsPanel {
         let mut p = SettingsPanel {
             values,
             keymap: crate::keys::current().clone(),
@@ -82,14 +93,16 @@ impl SettingsPanel {
             section: 0,
             scale: scale as f32,
             window: (0.0, 0.0),
+            bounds: (0.0, 0.0, 0.0, 0.0),
             rect: (0.0, 0.0, 0.0, 0.0),
+            drag: None,
             hits: Vec::new(),
             pixmap: None,
             choice: None,
             scroll: 0.0,
             max_scroll: 0.0,
         };
-        p.resize(window);
+        p.resize(window, bounds);
         p
     }
 
@@ -211,14 +224,79 @@ impl SettingsPanel {
         (v * self.scale).round()
     }
 
-    pub fn resize(&mut self, window: (u32, u32)) {
+    /// New window size (and area the panel may use). The panel opens centred on the window and
+    /// keeps its place afterwards, inside the bounds.
+    pub fn resize(&mut self, window: (u32, u32), bounds: (f32, f32, f32, f32)) {
         self.window = (window.0 as f32, window.1 as f32);
+        self.bounds = bounds;
         let (ww, wh) = self.window;
-        let w = (ww - self.u(24.0)).min(self.u(860.0)).max(1.0).floor();
-        let h = (wh - self.u(24.0)).min(self.u(560.0)).max(1.0).floor();
-        self.rect = (((ww - w) / 2.0).round(), ((wh - h) / 2.0).round(), w, h);
+        let (bw, bh) = (bounds.2 - bounds.0, bounds.3 - bounds.1);
+        let w = (bw - self.u(24.0)).min(self.u(860.0)).max(1.0).floor();
+        let h = (bh - self.u(24.0)).min(self.u(560.0)).max(1.0).floor();
+        let (x, y) = if self.rect.2 == 0.0 { ((ww - w) / 2.0, (wh - h) / 2.0) } else { (self.rect.0, self.rect.1) };
+        let (x, y) = self.clamp(x, y, w, h);
+        self.rect = (x, y, w, h);
         self.pixmap = None;
         self.choice = None;
+    }
+
+    fn clamp(&self, x: f32, y: f32, w: f32, h: f32) -> (f32, f32) {
+        let (b0, b1, b2, b3) = self.bounds;
+        (x.min(b2 - w).max(b0).round(), y.min(b3 - h).max(b1).round())
+    }
+
+    /// Shown beyond the window (on popup surfaces)
+    pub fn on_popups(&self) -> bool {
+        self.bounds != (0.0, 0.0, self.window.0, self.window.1)
+    }
+
+    /// A press on the header (not on a button) starts dragging the panel.
+    pub fn start_drag(&mut self, p: (f64, f64)) -> bool {
+        let (rx, ry, rw, _) = self.rect;
+        let (x, y) = (p.0 as f32, p.1 as f32);
+        if self.dialog.is_some() || x < rx || x >= rx + rw || y < ry || y >= ry + self.u(64.0) || self.hit(p).is_some() {
+            return false;
+        }
+        self.drag = Some((x - rx, y - ry));
+        self.choice = None;
+        true
+    }
+
+    /// Moves the panel while dragging. Returns true when it moved.
+    pub fn drag_to(&mut self, p: (f64, f64)) -> bool {
+        let Some((ox, oy)) = self.drag else { return false };
+        let (rx, ry, w, h) = self.rect;
+        let (x, y) = self.clamp(p.0 as f32 - ox, p.1 as f32 - oy, w, h);
+        let (dx, dy) = (x - rx, y - ry);
+        if dx == 0.0 && dy == 0.0 {
+            return false;
+        }
+        self.rect = (x, y, w, h);
+        for hit in &mut self.hits {
+            hit.1 += dx;
+            hit.2 += dy;
+        }
+        true
+    }
+
+    pub fn end_drag(&mut self) -> bool {
+        self.drag.take().is_some()
+    }
+
+    pub fn dragging(&self) -> bool {
+        self.drag.is_some()
+    }
+
+    /// State for test scripts
+    pub fn describe(&self) -> String {
+        format!(
+            "rect={:?} popups={} section={} waiting={:?} dialog={:?}",
+            self.rect,
+            self.on_popups(),
+            section_name(self.section),
+            self.capture,
+            self.dialog.as_ref().map(|d| d.text.clone())
+        )
     }
 
     /// Size the window should have at least to show the panel (window pixels)
@@ -326,8 +404,12 @@ impl SettingsPanel {
                 if let (Kind::Choice(options), Value::Choice(cur)) = (&DEFS[i].kind, self.values.get(i)) {
                     let items = options.iter().enumerate().map(|(k, o)| Item::check(o, "", Action::Choice(k), k == cur)).collect();
                     let (_, hx, hy, _, hh) = *self.hits.iter().find(|h| h.0 == Hit::Choice(i)).unwrap();
-                    let m =
-                        Menu::open(items, (hx as f64, (hy + hh) as f64), (self.window.0 as u32, self.window.1 as u32), self.scale as f64);
+                    let (at, window) = ((hx as f64, (hy + hh) as f64), (self.window.0 as u32, self.window.1 as u32));
+                    let m = if self.on_popups() {
+                        Menu::open_in(items, at, window, self.bounds, self.scale as f64)
+                    } else {
+                        Menu::open(items, at, window, self.scale as f64)
+                    };
                     self.choice = Some((i, m));
                 }
                 Outcome::Redraw

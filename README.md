@@ -150,7 +150,8 @@ cargo test
 
 `LUMARIS_DEBUG_TIMING=1` prints startup timings. `LUMARIS_AUTOTEST=<file>` runs a test script,
 one command per line: `wheel <steps> <x> <y>`, `key <name>`, `rclick` / `lclick` / `move <x> <y>`,
-`settings`, `info`, `wait <ms>`, `quit`. It is used to test Lumaris in a hidden, nested KWin, and
+`settings`, `settingsinfo`, `info`, `pmove` / `ppress <x> <y>` and `prelease` (input on popup
+surfaces), `wait <ms>`, `quit`. It is used to test Lumaris in a hidden, nested KWin, and
 `examples/fakeclick` sends real pointer clicks there.
 
 </details>

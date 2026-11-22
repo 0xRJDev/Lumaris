@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The settings window pops out of the Lumaris window like the menu (KDE Plasma and wlroots
+  desktops), so a small window no longer grows for it; drag it by its header
 - Keys page in the settings (F1, replaces the key list): click a key to change it, × removes it,
   + adds one; a key that is already used offers to swap. Saved to keys.conf at once
 - Fixed: dark fringes along transparent edges when zoomed (pixel art outlines, smooth zoom and

@@ -32,6 +32,10 @@ pub enum PopupInput {
     Motion(f64, f64),
     /// left (true) or right (false) button pressed at the last position
     Press(bool),
+    /// left button released
+    Release,
+    /// mouse wheel: notches, positive = up
+    Wheel(f64),
 }
 
 /// One menu level on the screen
@@ -69,7 +73,8 @@ struct State {
     levels: Levels,
     conn: Connection,
     scale: Arc<Mutex<f64>>,
-    over: Option<(f64, f64)>, // window position of the level under the pointer
+    /// the level under the pointer (its position is looked up for every event: it may move)
+    over: Option<WlSurface>,
 }
 
 macro_rules! ignore_events {
@@ -128,21 +133,31 @@ impl Dispatch<WlPointer, ()> for State {
         if std::env::var_os("LUMARIS_DEBUG_POPUP").is_some() {
             eprintln!("popup pointer: {event:?} over={:?}", state.over);
         }
-        let to_window = |o: (f64, f64), sx: f64, sy: f64| (o.0 + sx * scale, o.1 + sy * scale);
+        let to_window = |over: &Option<WlSurface>, sx: f64, sy: f64| {
+            let s = over.as_ref()?;
+            let levels = state.levels.lock().unwrap();
+            let l = levels.iter().find(|l| l.surface == *s)?;
+            Some((l.x + sx * scale, l.y + sy * scale))
+        };
         match event {
             wl_pointer::Event::Enter { surface, surface_x, surface_y, .. } => {
-                state.over = state.levels.lock().unwrap().iter().find(|l| l.surface == surface).map(|l| (l.x, l.y));
-                if let Some(o) = state.over {
-                    let (x, y) = to_window(o, surface_x, surface_y);
+                let over = Some(surface);
+                if let Some((x, y)) = to_window(&over, surface_x, surface_y) {
                     let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Motion(x, y)));
                 }
+                state.over = over;
             }
             wl_pointer::Event::Leave { .. } => state.over = None,
             wl_pointer::Event::Motion { surface_x, surface_y, .. } => {
-                if let Some(o) = state.over {
-                    let (x, y) = to_window(o, surface_x, surface_y);
+                if let Some((x, y)) = to_window(&state.over, surface_x, surface_y) {
                     let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Motion(x, y)));
                 }
+            }
+            wl_pointer::Event::Button { button: 0x110, state: WEnum::Value(ButtonState::Released), .. } => {
+                let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Release));
+            }
+            wl_pointer::Event::Axis { axis: WEnum::Value(wl_pointer::Axis::VerticalScroll), value, .. } if state.over.is_some() => {
+                let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Wheel(-value / 10.0)));
             }
             wl_pointer::Event::Button { button, state: WEnum::Value(ButtonState::Pressed), .. }
                 if state.over.is_some()
