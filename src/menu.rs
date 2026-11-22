@@ -95,6 +95,9 @@ pub struct Menu {
     levels: Vec<Level>,
     scale: f32,
     window: (f32, f32),
+    /// where the menu may be placed (window coordinates): the window, or the whole screen
+    /// area when the menu is shown on popup surfaces
+    bounds: (f32, f32, f32, f32),
     /// increases whenever the picture changes
     pub version: u64,
 }
@@ -110,8 +113,16 @@ impl Menu {
         self.unit(style().point_size * 2.8)
     }
 
+    /// Like `open`, but the menu may extend beyond the window within `bounds`
+    pub fn open_in(items: Vec<Item>, at: (f64, f64), window: (u32, u32), bounds: (f32, f32, f32, f32), scale: f64) -> Menu {
+        let mut m = Menu { levels: Vec::new(), scale: scale as f32, window: (window.0 as f32, window.1 as f32), bounds, version: 0 };
+        m.push_level(items, at.0 as f32, at.1 as f32, None, None);
+        m
+    }
+
     pub fn open(items: Vec<Item>, at: (f64, f64), window: (u32, u32), scale: f64) -> Menu {
-        let mut m = Menu { levels: Vec::new(), scale: scale as f32, window: (window.0 as f32, window.1 as f32), version: 0 };
+        let (ww, wh) = (window.0 as f32, window.1 as f32);
+        let mut m = Menu { levels: Vec::new(), scale: scale as f32, window: (ww, wh), bounds: (0.0, 0.0, ww, wh), version: 0 };
         m.push_level(items, at.0 as f32, at.1 as f32, None, None);
         m
     }
@@ -144,7 +155,7 @@ impl Menu {
 
     /// Window size needed to show the menu with its widest submenu beside it
     pub fn needed_size(items: &[Item], scale: f64) -> (u32, u32) {
-        let m = Menu { levels: Vec::new(), scale: scale as f32, window: (f32::MAX, f32::MAX), version: 0 };
+        let m = Menu { levels: Vec::new(), scale: scale as f32, window: (f32::MAX, f32::MAX), bounds: (0.0, 0.0, f32::MAX, f32::MAX), version: 0 };
         let (w, h, tops) = m.measure(items);
         let (mut sub_w, mut bottom) = (0.0f32, h);
         for (it, top) in items.iter().zip(&tops) {
@@ -161,16 +172,16 @@ impl Menu {
     fn push_level(&mut self, items: Vec<Item>, x: f32, y: f32, parent: Option<(f32, f32)>, opened_by: Option<usize>) {
         let pad = self.unit(4.0);
         let (w, h, tops) = self.measure(&items);
-        let (ww, wh) = self.window;
+        let (bx0, by0, bx1, by1) = self.bounds;
         let x = match parent {
             // submenu: right of the parent, or left when there is no room
             Some((left, right)) => {
-                if right - pad + w <= ww || left + pad - w < 0.0 { right - pad } else { left + pad - w }
+                if right - pad + w <= bx1 || left + pad - w < bx0 { right - pad } else { left + pad - w }
             }
-            None => if x + w > ww { (x - w).max(0.0) } else { x },
+            None => if x + w > bx1 { (x - w).max(bx0) } else { x },
         };
-        let x = x.min(ww - w).max(0.0).round();
-        let y = (if y + h > wh { (wh - h).max(0.0) } else { y }).round();
+        let x = x.min(bx1 - w).max(bx0).round();
+        let y = (if y + h > by1 { (by1 - h).max(by0) } else { y }).max(by0).round();
         self.levels.push(Level { items, x, y, w, h, tops, hover: None, opened_by, pixmap: None });
         self.version += 1;
     }
@@ -210,6 +221,16 @@ impl Menu {
                 self.push_level(children, 0.0, y, Some(range), Some(i));
             }
         }
+    }
+
+    /// true when the menu may extend beyond the window (shown on popup surfaces)
+    pub fn on_popups(&self) -> bool {
+        self.bounds != (0.0, 0.0, self.window.0, self.window.1)
+    }
+
+    /// Positions and sizes of the open levels (tests)
+    pub fn rects(&self) -> Vec<(i32, i32, i32, i32)> {
+        self.levels.iter().map(|l| (l.x as i32, l.y as i32, l.w as i32, l.h as i32)).collect()
     }
 
     /// The window size the menu was laid out for

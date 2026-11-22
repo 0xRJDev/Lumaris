@@ -16,6 +16,8 @@ pub struct Frame {
     pub margins: [i32; 4],
     /// Usable area of the window's screen (without panels).
     pub area: (i32, i32),
+    /// Position of the window content in that area.
+    pub client: (i32, i32),
 }
 
 struct Receiver {
@@ -24,12 +26,12 @@ struct Receiver {
 
 #[zbus::interface(name = "org.lumaris.Placement")]
 impl Receiver {
-    /// "left,top,right,bottom,areaWidth,areaHeight"
+    /// "left,top,right,bottom,areaWidth,areaHeight,clientX,clientY"
     #[zbus(name = "frame")]
     fn frame(&self, info: String) {
         let v: Vec<i32> = info.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-        if v.len() == 6 {
-            *self.frame.lock().unwrap() = Some(Frame { margins: [v[0], v[1], v[2], v[3]], area: (v[4], v[5]) });
+        if v.len() == 8 {
+            *self.frame.lock().unwrap() = Some(Frame { margins: [v[0], v[1], v[2], v[3]], area: (v[4], v[5]), client: (v[6], v[7]) });
         }
     }
 }
@@ -137,7 +139,7 @@ const SCRIPT: &str = r#"(function() {
     var own = false, lastSize = null, cx = 0, cy = 0, info = '';
     function report() {
       var g = w.frameGeometry, c = w.clientGeometry, a = workspace.clientArea(KWin.PlacementArea, w);
-      var m = [c.x - g.x, c.y - g.y, g.x + g.width - c.x - c.width, g.y + g.height - c.y - c.height, a.width, a.height]
+      var m = [c.x - g.x, c.y - g.y, g.x + g.width - c.x - c.width, g.y + g.height - c.y - c.height, a.width, a.height, c.x - a.x, c.y - a.y]
         .map(function(v) { return Math.round(v); }).join(',');
       if (m != info) { info = m; callDBus(SERVICE, '/lumaris/placement', 'org.lumaris.Placement', 'frame', m); }
     }

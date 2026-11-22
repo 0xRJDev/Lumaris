@@ -14,6 +14,7 @@ mod keys;
 mod kwin;
 mod menu;
 mod panel;
+mod popup;
 mod portal;
 mod raw;
 mod settings;
@@ -56,6 +57,8 @@ pub enum UserEvent {
     VectorRendered(PathBuf, u64, Result<Arc<Decoded>, String>),
     /// open this file (dialog, drag and drop, another `lumaris` in single instance mode)
     Open(PathBuf),
+    /// mouse input on a menu shown outside the window
+    Popup(popup::PopupInput),
 }
 
 /// The animation being played: image, current frame, when the next frame is due
@@ -105,6 +108,8 @@ struct App {
     size_before_menu: Option<PhysicalSize<u32>>,
     /// zooming with Shift+wheel: the window does not follow the zoom
     zoom_in_place: bool,
+    /// menus on popup surfaces, so they can extend beyond the window (Wayland)
+    popups: Option<popup::Popups>,
     info: Option<info::InfoBox>,
     info_zoom: f64,
     help: Option<info::InfoBox>,
@@ -790,10 +795,25 @@ impl App {
             items.insert(3, Item::sub("Commands", user)); // after the open entries
         }
         drop(km);
-        // a window too small for the menu grows while the menu is open
+        // menus on popup surfaces may use the whole screen area around the window
+        let scale = window.scale_factor();
+        let s = window.inner_size();
+        if let (Some(_), Some(f)) = (self.popups.as_ref(), self.kwin.as_ref().and_then(|k| k.frame())) {
+            if window.fullscreen().is_none() {
+                let b = (
+                    (-f.client.0 as f64 * scale) as f32,
+                    (-f.client.1 as f64 * scale) as f32,
+                    ((f.area.0 - f.client.0) as f64 * scale) as f32,
+                    ((f.area.1 - f.client.1) as f64 * scale) as f32,
+                );
+                self.menu = Some(menu::Menu::open_in(items, at, (s.width, s.height), b, scale));
+                self.sync_overlays();
+                return;
+            }
+        }
+        // otherwise a window too small for the menu grows while the menu is open
         let mut at = at;
         let (nw, nh) = menu::Menu::needed_size(&items, window.scale_factor());
-        let s = window.inner_size();
         if self.windowed().is_some() && (s.width < nw || s.height < nh) {
             let (mw, mh) = self.max_client_size_now();
             let new = PhysicalSize::new(s.width.max(nw).min(mw as u32).max(s.width), s.height.max(nh).min(mh as u32).max(s.height));
@@ -864,8 +884,17 @@ impl App {
             if let Some(p) = settings_panel.as_mut() {
                 layers.extend(p.layers());
             }
+            let on_popups = self.popups.is_some() && menu.as_ref().is_some_and(|m| m.on_popups());
             if let Some(m) = menu.as_mut() {
-                layers.extend(m.layers());
+                if on_popups {
+                    if let Some(p) = self.popups.as_mut() {
+                        p.show(&m.layers(), scale);
+                    }
+                } else {
+                    layers.extend(m.layers());
+                }
+            } else if let Some(p) = self.popups.as_mut() {
+                p.hide();
             }
             r.set_overlays(&layers);
         }
@@ -1064,6 +1093,15 @@ impl App {
                     }
                 }
             }
+            ["menuinfo"] => {
+                println!(
+                    "MENU levels={:?} popups={:?} window={:?} frame={:?}",
+                    self.menu.as_ref().map(|m| m.rects()),
+                    self.popups.as_ref().map(|p| p.count()),
+                    self.window.as_ref().map(|w| w.inner_size()),
+                    self.kwin.as_ref().and_then(|k| k.frame())
+                );
+            }
             ["apps"] => {
                 for a in apps::for_file(self.files.current()) {
                     println!("APP {} ({})", a.name, a.id);
@@ -1157,6 +1195,7 @@ impl ApplicationHandler<UserEvent> for App {
         self.apply_settings(None);
         if let Some(w) = self.window.clone() {
             dnd::start(&w, self.proxy.clone());
+            self.popups = popup::Popups::new(&w, self.proxy.clone());
         }
         match first {
             Ok(img) => {
@@ -1173,6 +1212,21 @@ impl ApplicationHandler<UserEvent> for App {
             UserEvent::Decoded(path, result) => (path, result),
             UserEvent::Quit => return event_loop.exit(),
             UserEvent::Test(cmd) => return self.test_command(event_loop, &cmd),
+            UserEvent::Popup(input) => {
+                match input {
+                    popup::PopupInput::Motion(x, y) => {
+                        self.cursor = (x, y);
+                        if self.menu.as_mut().is_some_and(|m| m.hover((x, y))) {
+                            self.sync_overlays();
+                        }
+                    }
+                    popup::PopupInput::Press(left) => {
+                        let at = self.cursor;
+                        self.menu_click(event_loop, at, !left);
+                    }
+                }
+                return;
+            }
             UserEvent::Open(path) => {
                 self.open_path(event_loop, &path);
                 if let Some(k) = &self.kwin {
@@ -1396,6 +1450,8 @@ impl ApplicationHandler<UserEvent> for App {
                 self.key(event_loop, event.logical_key, code);
             }
             WindowEvent::ModifiersChanged(m) => self.mods = m.state(),
+            // clicking elsewhere on the desktop closes the menu
+            WindowEvent::Focused(false) => self.close_menu(),
             _ => {}
         }
     }
@@ -1515,6 +1571,7 @@ fn main() {
         size_before_settings: None,
         size_before_menu: None,
         zoom_in_place: false,
+        popups: None,
         info: None,
         info_zoom: 0.0,
         help: None,
