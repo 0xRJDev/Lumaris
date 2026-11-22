@@ -8,6 +8,8 @@ draws on the GPU and stays out of the way: no toolbar, no editing, just the imag
 Made for KDE Plasma on Wayland, where it looks and behaves like part of the desktop; it also runs
 on other Wayland desktops and X11 with fewer niceties (see [Desktops](#desktops)).
 
+![Lumaris with the image info and the right-click menu open](docs/screenshot.png)
+
 ## Features
 
 **Viewing**
