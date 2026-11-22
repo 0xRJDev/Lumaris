@@ -80,8 +80,33 @@ impl Dispatch<WlPointer, ()> for State {
 struct Layer {
     surface: WlSurface,
     subsurface: WlSubsurface,
-    buffer: WlBuffer,
-    pool: WlShmPool,
+    /// buffer shown now and the one before it (kept until the compositor took the new one)
+    buffer: Option<(WlBuffer, WlShmPool)>,
+    old: Option<(WlBuffer, WlShmPool)>,
+    position: (i32, i32),
+    /// fingerprint of the picture shown
+    checksum: u64,
+}
+
+impl Layer {
+    fn destroy(mut self) {
+        for (b, p) in [self.buffer.take(), self.old.take()].into_iter().flatten() {
+            b.destroy();
+            p.destroy();
+        }
+        self.subsurface.destroy();
+        self.surface.destroy();
+    }
+}
+
+fn checksum(pixels: &[u8], w: u32, h: u32) -> u64 {
+    let mut sum = (w as u64) << 32 | h as u64;
+    for (i, c) in pixels.chunks(8).enumerate() {
+        let mut v = [0u8; 8];
+        v[..c.len()].copy_from_slice(c);
+        sum = sum.rotate_left(5) ^ u64::from_le_bytes(v) ^ i as u64;
+    }
+    sum
 }
 
 pub struct Popups {
@@ -124,23 +149,50 @@ impl Popups {
     }
 
     /// Shows these menu levels: premultiplied RGBA (pixels, width, height, x, y in window
-    /// coordinates, physical pixels). An empty list hides the popups.
+    /// coordinates, physical pixels). Surfaces are kept and only changed pictures are replaced;
+    /// the changes appear together with the window's next frame (synchronized subsurfaces).
     pub fn show(&mut self, layers: &[(&[u8], u32, u32, i32, i32)], scale: f64) {
-        self.hide();
         *self.scale.lock().unwrap() = scale;
         let buffer_scale = scale.round().max(1.0) as i32;
+        while self.layers.len() > layers.len() {
+            if let Some(l) = self.layers.pop() {
+                l.destroy();
+            }
+        }
         let mut shown = Vec::new();
-        for &(pixels, w, h, x, y) in layers {
-            let Some(layer) = self.layer(pixels, w, h, buffer_scale) else { continue };
-            layer.subsurface.set_position((x as f64 / scale).round() as i32, (y as f64 / scale).round() as i32);
-            layer.subsurface.place_above(&self.parent);
-            layer.subsurface.set_desync();
+        for (i, &(pixels, w, h, x, y)) in layers.iter().enumerate() {
+            if i == self.layers.len() {
+                let surface = self.compositor.create_surface(&self.qh, ());
+                let subsurface = self.subcompositor.get_subsurface(&surface, &self.parent, &self.qh, ());
+                subsurface.set_sync();
+                subsurface.place_above(&self.parent);
+                if surface.version() >= 3 {
+                    surface.set_buffer_scale(buffer_scale);
+                }
+                self.layers.push(Layer { surface, subsurface, buffer: None, old: None, position: (i32::MIN, i32::MIN), checksum: 0 });
+            }
+            let pos = ((x as f64 / scale).round() as i32, (y as f64 / scale).round() as i32);
+            let sum = checksum(pixels, w, h);
+            let new_buffer = if self.layers[i].checksum != sum { self.buffer(pixels, w, h, i) } else { None };
+            let layer = &mut self.layers[i];
+            if layer.position != pos {
+                layer.subsurface.set_position(pos.0, pos.1);
+                layer.position = pos;
+            }
+            if let Some(nb) = new_buffer {
+                if let Some((b, p)) = layer.old.take() {
+                    b.destroy();
+                    p.destroy();
+                }
+                layer.surface.attach(Some(&nb.0), 0, 0);
+                layer.surface.damage(0, 0, i32::MAX, i32::MAX);
+                layer.old = layer.buffer.replace(nb);
+                layer.checksum = sum;
+            }
             layer.surface.commit();
             shown.push((layer.surface.clone(), x as f64, y as f64));
-            self.layers.push(layer);
         }
         *self.shown.lock().unwrap() = shown;
-        // positions take effect with the next commit of the window (the next frame)
         let _ = self.conn.flush();
     }
 
@@ -149,22 +201,23 @@ impl Popups {
     }
 
     pub fn hide(&mut self) {
+        if self.layers.is_empty() {
+            return;
+        }
         for l in self.layers.drain(..) {
-            l.subsurface.destroy();
-            l.surface.destroy();
-            l.buffer.destroy();
-            l.pool.destroy();
+            l.destroy();
         }
         self.shown.lock().unwrap().clear();
         let _ = self.conn.flush();
     }
 
-    fn layer(&self, pixels: &[u8], w: u32, h: u32, buffer_scale: i32) -> Option<Layer> {
+    /// A shared memory buffer with the picture
+    fn buffer(&self, pixels: &[u8], w: u32, h: u32, n: usize) -> Option<(WlBuffer, WlShmPool)> {
         let stride = w as usize * 4;
         let size = stride * h as usize;
         // shared memory file (created and unlinked right away)
         let dir = std::env::var_os("XDG_RUNTIME_DIR").map(std::path::PathBuf::from).unwrap_or_else(std::env::temp_dir);
-        let path = dir.join(format!("lumaris-popup-{}-{}", std::process::id(), self.layers.len()));
+        let path = dir.join(format!("lumaris-popup-{}-{n}", std::process::id()));
         let file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(true).open(&path).ok()?;
         let _ = std::fs::remove_file(&path);
         file.set_len(size as u64).ok()?;
@@ -177,13 +230,6 @@ impl Popups {
         file.write_all_at(&bgra, 0).ok()?;
         let pool = self.shm.create_pool(file.as_fd(), size as i32, &self.qh, ());
         let buffer = pool.create_buffer(0, w as i32, h as i32, stride as i32, wl_shm::Format::Argb8888, &self.qh, ());
-        let surface = self.compositor.create_surface(&self.qh, ());
-        let subsurface = self.subcompositor.get_subsurface(&surface, &self.parent, &self.qh, ());
-        if surface.version() >= 3 {
-            surface.set_buffer_scale(buffer_scale);
-        }
-        surface.attach(Some(&buffer), 0, 0);
-        surface.damage(0, 0, i32::MAX, i32::MAX);
-        Some(Layer { surface, subsurface, buffer, pool })
+        Some((buffer, pool))
     }
 }
