@@ -20,7 +20,10 @@ if command -v rsvg-convert >/dev/null 2>&1; then
 fi
 
 command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database -q "$PREFIX/share/applications" || true
-command -v gtk-update-icon-cache >/dev/null 2>&1 && gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" 2>/dev/null || true
+# refresh the icon index only where one exists (a stale index would hide the new icon)
+if [ -f "$PREFIX/share/icons/hicolor/icon-theme.cache" ] && command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -q -t "$PREFIX/share/icons/hicolor" 2>/dev/null || rm -f "$PREFIX/share/icons/hicolor/icon-theme.cache"
+fi
 command -v kbuildsycoca6 >/dev/null 2>&1 && kbuildsycoca6 >/dev/null 2>&1 || true
 
 echo "Installed Lumaris to $PREFIX"
