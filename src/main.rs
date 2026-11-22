@@ -115,6 +115,8 @@ struct App {
     /// the zoom shown briefly while zooming
     toast: toast::Toast,
     toast_zoom: f64,
+    /// window size the panels were last laid out for
+    overlay_size: (u32, u32),
     info: Option<info::InfoBox>,
     info_zoom: f64,
     help: Option<info::InfoBox>,
@@ -877,6 +879,7 @@ impl App {
     /// Shows the current panels: image info, settings window, menu (on top)
     fn sync_overlays(&mut self) {
         let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
+        self.overlay_size = size;
         let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
         self.nav.configure(size, scale);
         self.nav.set_view(self.view.image_rect());
@@ -1320,6 +1323,11 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let animating = self.view.step(Instant::now());
                 self.follow_zoom(event_loop);
+                // the window resized itself (following the zoom): place the panels again
+                let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
+                if size != self.overlay_size && (self.toast.deadline().is_some() || self.help.is_some() || self.navigation_panel) {
+                    self.sync_overlays();
+                }
                 // the zoom while zooming (not for fitting a new image)
                 let target = self.view.target_zoom();
                 if (target - self.toast_zoom).abs() > 1e-9 {
@@ -1612,6 +1620,7 @@ fn main() {
         popups: None,
         toast: toast::Toast::new(),
         toast_zoom: 0.0,
+        overlay_size: (0, 0),
         info: None,
         info_zoom: 0.0,
         help: None,
