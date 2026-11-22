@@ -7,6 +7,32 @@ use std::sync::Arc;
 
 use crate::decode::Decoded;
 
+/// Copies still being prepared (waited for at exit, so a copy right before quitting works)
+static COPIES: std::sync::Mutex<usize> = std::sync::Mutex::new(0);
+static COPIES_DONE: std::sync::Condvar = std::sync::Condvar::new();
+
+fn copy_in_background(f: impl FnOnce() + Send + 'static) {
+    *COPIES.lock().unwrap() += 1;
+    std::thread::spawn(move || {
+        f();
+        *COPIES.lock().unwrap() -= 1;
+        COPIES_DONE.notify_all();
+    });
+}
+
+/// Waits (at most a few seconds) until running copies have reached the clipboard
+pub fn wait_for_copies() {
+    let mut n = COPIES.lock().unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while *n > 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        n = COPIES_DONE.wait_timeout(n, left).unwrap().0;
+    }
+}
+
 fn clipboard_command(mime: &str) -> Command {
     if std::env::var_os("WAYLAND_DISPLAY").is_some() {
         let mut c = Command::new("wl-copy");
@@ -34,7 +60,7 @@ fn to_clipboard(mime: &str, data: &[u8]) {
 
 /// Copies the whole image (full size) to the clipboard as PNG, in the background.
 pub fn copy_image(img: Arc<Decoded>) {
-    std::thread::spawn(move || {
+    copy_in_background(move || {
         let mut png = Vec::new();
         let enc = image::codecs::png::PngEncoder::new_with_quality(
             &mut png,
@@ -49,7 +75,7 @@ pub fn copy_image(img: Arc<Decoded>) {
 }
 
 pub fn copy_text(text: String) {
-    std::thread::spawn(move || to_clipboard("text/plain;charset=utf-8", text.as_bytes()));
+    copy_in_background(move || to_clipboard("text/plain;charset=utf-8", text.as_bytes()));
 }
 
 /// Opens the file manager with the file selected (falls back to opening the folder).

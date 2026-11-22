@@ -1527,8 +1527,26 @@ fn main() {
         fade_start: None,
         _instance: single,
     };
-    if let Err(e) = event_loop.run_app(&mut app) {
+    let result = event_loop.run_app(&mut app);
+    // clean up what outlives Lumaris (the KWin script, the blur), then end the process at once:
+    // decoder threads may still be running, and tearing down C libraries under them crashes
+    app.blur = None;
+    app.kwin = None;
+    desktop::wait_for_copies();
+    if let Err(e) = result {
         eprintln!("lumaris: {e}");
-        std::process::exit(1);
+        quit_now(1);
     }
+    quit_now(0);
+}
+
+/// Ends the process without running exit handlers (see the end of main)
+fn quit_now(code: i32) -> ! {
+    unsafe extern "C" {
+        fn _exit(code: i32) -> !;
+    }
+    use std::io::Write;
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+    unsafe { _exit(code) }
 }

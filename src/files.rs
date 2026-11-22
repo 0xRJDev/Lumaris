@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 const EXTENSIONS: &[&str] = &[
     "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "bmp", "dib", "tif", "tiff", "qoi",
     "ico", "tga", "pnm", "pbm", "pgm", "ppm", "pam", "svg", "svgz", "avif", "heic", "heif", "hif", "jxl",
-    "exr", "hdr", "dds", "ff", "psd", "psb", "kra", "ora",
+    "exr", "hdr", "dds", "ff", "psd", "psb", "kra", "ora", "jp2", "j2k", "j2c", "jpf", "jpx", "jpc", "xcf", "pdf",
 ];
 
 pub fn is_supported(path: &Path) -> bool {

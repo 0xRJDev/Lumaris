@@ -23,8 +23,8 @@ A lean and fast image viewer for Linux, written in Rust.
   solid colour, checkerboard), zoom, navigation (sort order), slideshow, formats; saved to
   `~/.config/lumaris/lumaris.conf`, which can also be edited by hand
 - Formats: JPEG, PNG, GIF, WebP, AVIF, HEIF/HEIC, JPEG XL, SVG (sharp at any zoom), camera RAW
-  (LibRaw), EXR and Radiance HDR (tone mapped), PSD/PSB, Krita, OpenRaster, BMP, TIFF, QOI, ICO,
-  TGA, PNM, DDS, farbfeld; animated GIF, WebP and PNG; embedded colour profiles
+  (LibRaw), EXR and Radiance HDR (tone mapped), PSD/PSB, GIMP XCF, Krita, OpenRaster, JPEG 2000,
+  PDF (first page, needs poppler), BMP, TIFF, QOI, ICO, TGA, PNM, DDS, farbfeld; animated GIF, WebP and PNG; embedded colour profiles
 - Navigation panel (buttons and a zoom map), rotate / flip, move to trash, open dialog, drag and
   drop, single window mode, slideshow with fade, histogram, user commands, F1 key help
 

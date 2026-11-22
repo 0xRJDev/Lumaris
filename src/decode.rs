@@ -60,6 +60,9 @@ pub fn decode(path: &Path) -> Result<Decoded, String> {
         "jxl" => decode_jxl(path),
         "psd" | "psb" => decode_psd(path),
         "kra" | "ora" => decode_merged_image(path),
+        "jp2" | "j2k" | "j2c" | "jpf" | "jpx" | "jpc" => decode_jpeg2000(path),
+        "xcf" => decode_xcf(path),
+        "pdf" => decode_pdf(path),
         e if RAW_EXTENSIONS.contains(&e) => {
             let develop = crate::settings::current().choice("RawMode") == 1;
             crate::raw::decode(path, develop).map(Decoded::raster)
@@ -212,6 +215,79 @@ fn decode_psd(path: &Path) -> Result<Decoded, String> {
     }
     let (w, h) = (w as u32, h as u32);
     Ok(Decoded { width: w, height: h, rgba, frames: Vec::new(), vector: None, pixel_width: w, pixel_height: h })
+}
+
+/// JPEG 2000 (OpenJPEG, ported to Rust)
+fn decode_jpeg2000(path: &Path) -> Result<Decoded, String> {
+    let img = jpeg2k::Image::from_file(path).map_err(|e| e.to_string())?;
+    let img = DynamicImage::try_from(&img).map_err(|e| e.to_string())?;
+    Ok(Decoded::raster(img))
+}
+
+/// GIMP: the visible layers composited (normal mode, opacity, offsets)
+fn decode_xcf(path: &Path) -> Result<Decoded, String> {
+    use xcf::PropertyIdentifier as P;
+    let file = xcf::Xcf::open(path).map_err(|e| format!("{e:?}"))?;
+    let (w, h) = file.dimensions();
+    let mut out = vec![0f32; (w * h * 4) as usize]; // premultiplied
+    // layers are stored top first
+    for layer in file.layers.iter().rev() {
+        let prop = |kind: P| layer.properties.iter().find(|p| p.kind == kind).and_then(|p| match &p.payload {
+            xcf::PropertyPayload::Unknown(b) => Some(b.clone()),
+            _ => None,
+        });
+        let be32 = |b: &[u8], o: usize| b.get(o..o + 4).map(|x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]));
+        if prop(P::PropVisible).and_then(|b| be32(&b, 0)) == Some(0) {
+            continue;
+        }
+        let opacity = prop(P::PropOpacity).and_then(|b| be32(&b, 0)).map(|o| o.min(255) as f32 / 255.0).unwrap_or(1.0);
+        let (ox, oy) = prop(P::PropOffsets)
+            .map(|b| (be32(&b, 0).unwrap_or(0) as i32 as i64, be32(&b, 4).unwrap_or(0) as i32 as i64))
+            .unwrap_or((0, 0));
+        let pixels = layer.raw_rgba_buffer();
+        for y in 0..layer.height as i64 {
+            let ty = y + oy;
+            if ty < 0 || ty >= h as i64 {
+                continue;
+            }
+            for x in 0..layer.width as i64 {
+                let tx = x + ox;
+                if tx < 0 || tx >= w as i64 {
+                    continue;
+                }
+                let p = pixels[(y * layer.width as i64 + x) as usize].0;
+                let a = p[3] as f32 / 255.0 * opacity;
+                let i = ((ty * w as i64 + tx) * 4) as usize;
+                for c in 0..3 {
+                    out[i + c] = p[c] as f32 / 255.0 * a + out[i + c] * (1.0 - a);
+                }
+                out[i + 3] = a + out[i + 3] * (1.0 - a);
+            }
+        }
+    }
+    // back to straight alpha
+    let mut rgba = Vec::with_capacity(out.len());
+    for px in out.chunks_exact(4) {
+        let a = px[3];
+        let un = |v: f32| if a > 0.0 { (v / a * 255.0 + 0.5).min(255.0) as u8 } else { 0 };
+        rgba.extend_from_slice(&[un(px[0]), un(px[1]), un(px[2]), (a * 255.0 + 0.5) as u8]);
+    }
+    Ok(Decoded { width: w, height: h, rgba, frames: Vec::new(), vector: None, pixel_width: w, pixel_height: h })
+}
+
+/// PDF: the first page, rendered by Poppler (pdftocairo) at about twice the screen height
+fn decode_pdf(path: &Path) -> Result<Decoded, String> {
+    let out = std::process::Command::new("pdftocairo")
+        .args(["-png", "-f", "1", "-l", "1", "-singlefile", "-scale-to", "2880"])
+        .arg(path)
+        .arg("-")
+        .output()
+        .map_err(|_| "showing PDF files needs poppler (pdftocairo)".to_string())?;
+    if !out.status.success() || out.stdout.is_empty() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    let img = image::load_from_memory_with_format(&out.stdout, image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    Ok(Decoded::raster(img))
 }
 
 /// Krita and OpenRaster files: zip archives with the merged image as mergedimage.png
