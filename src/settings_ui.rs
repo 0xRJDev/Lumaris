@@ -35,6 +35,8 @@ pub struct SettingsPanel {
     pixmap: Option<Pixmap>,
     /// open choice list: setting index and its menu
     choice: Option<(usize, Menu)>,
+    scroll: f32,
+    max_scroll: f32,
 }
 
 impl SettingsPanel {
@@ -48,6 +50,8 @@ impl SettingsPanel {
             hits: Vec::new(),
             pixmap: None,
             choice: None,
+            scroll: 0.0,
+            max_scroll: 0.0,
         };
         p.resize(window);
         p
@@ -112,6 +116,7 @@ impl SettingsPanel {
         match self.hit(p) {
             Some(Hit::Section(s)) => {
                 self.section = s;
+                self.scroll = 0.0;
                 self.pixmap = None;
                 Outcome::Redraw
             }
@@ -140,6 +145,20 @@ impl SettingsPanel {
             }
             None => Outcome::Nothing,
         }
+    }
+
+    /// Mouse wheel: scrolls the settings. Returns true when the panel must be redrawn.
+    pub fn wheel(&mut self, steps: f64) -> bool {
+        if self.choice.is_some() {
+            return false;
+        }
+        let old = self.scroll;
+        self.scroll = (self.scroll - steps as f32 * self.u(60.0)).clamp(0.0, self.max_scroll);
+        if self.scroll != old {
+            self.pixmap = None;
+            return true;
+        }
+        false
     }
 
     /// Esc: closes an open choice list first. Returns true when the panel should close.
@@ -237,19 +256,37 @@ impl SettingsPanel {
         let left = side + self.u(28.0);
         let right = w - self.u(28.0);
         draw_text(&mut pm, font, SECTIONS[self.section], title, left, baseline_in(self.u(14.0), self.u(40.0), title), st.text, 1.0);
+        // the settings rows scroll inside this area
+        let area_top = self.u(64.0);
+        let area_h = (h - area_top - self.u(12.0)).max(1.0);
+        let mut cpm = Pixmap::new(w as u32, area_h as u32)?;
+        let content_h = self.u(6.0) + self.u(64.0) * self.defs().count() as f32 + self.u(6.0);
+        self.max_scroll = (content_h - area_h).max(0.0);
+        self.scroll = self.scroll.clamp(0.0, self.max_scroll);
+        let screen_top = ry + area_top;
+        // a hit area in content coordinates -> window coordinates, cut to the visible part
+        let push_hit = |hits: &mut Vec<(Hit, f32, f32, f32, f32)>, hit: Hit, x: f32, y: f32, hw: f32, hh: f32| {
+            let (y0, y1) = (y.max(0.0), (y + hh).min(area_h));
+            if y1 > y0 {
+                hits.push((hit, x, screen_top + y0, hw, y1 - y0));
+            }
+        };
         let row_h = self.u(64.0);
         let defs: Vec<(usize, &Def)> = self.defs().collect();
         for (n, (i, d)) in defs.into_iter().enumerate() {
-            let top = self.u(70.0) + row_h * n as f32;
+            let top = self.u(6.0) + row_h * n as f32 - self.scroll;
+            if top + row_h < 0.0 || top > area_h {
+                continue; // scrolled out of view
+            }
             if n > 0 {
                 paint.set_color(color(st.text, 0.08));
                 if let Some(r) = Rect::from_xywh(left, top, right - left, 1.0) {
-                    pm.fill_rect(r, &paint, Transform::identity(), None);
+                    cpm.fill_rect(r, &paint, Transform::identity(), None);
                 }
             }
             let label = if d.restart { format!("{} (after a restart)", d.label) } else { d.label.to_string() };
-            draw_text(&mut pm, font, &label, px, left, top + self.u(26.0), st.text, 1.0);
-            draw_text(&mut pm, font, d.help, small, left, top + self.u(46.0), st.text, 0.55);
+            draw_text(&mut cpm, font, &label, px, left, top + self.u(26.0), st.text, 1.0);
+            draw_text(&mut cpm, font, d.help, small, left, top + self.u(46.0), st.text, 0.55);
             let mid = top + row_h / 2.0;
             match (&d.kind, self.values.get(i)) {
                 (Kind::Bool, Value::Bool(on)) => {
@@ -258,15 +295,15 @@ impl SettingsPanel {
                     let (sx, sy) = (right - sw, (mid - sh / 2.0).round());
                     let track = rounded_rect(sx, sy, sw, sh, sh / 2.0);
                     if on {
-                        fill(&mut pm, &mut paint, track, st.selection, 1.0);
+                        fill(&mut cpm, &mut paint, track, st.selection, 1.0);
                     } else {
-                        fill(&mut pm, &mut paint, track.clone(), st.text, 0.12);
-                        stroke(&mut pm, &mut paint, track, st.text, 0.35, 1.0);
+                        fill(&mut cpm, &mut paint, track.clone(), st.text, 0.12);
+                        stroke(&mut cpm, &mut paint, track, st.text, 0.35, 1.0);
                     }
                     let k = sh - self.u(6.0);
                     let kx = if on { sx + sw - k - self.u(3.0) } else { sx + self.u(3.0) };
-                    fill(&mut pm, &mut paint, rounded_rect(kx, sy + self.u(3.0), k, k, k / 2.0), [255, 255, 255], 1.0);
-                    hits.push((Hit::Toggle(i), rx + sx - self.u(8.0), ry + top, sw + self.u(16.0), row_h));
+                    fill(&mut cpm, &mut paint, rounded_rect(kx, sy + self.u(3.0), k, k, k / 2.0), [255, 255, 255], 1.0);
+                    push_hit(&mut hits, Hit::Toggle(i), rx + sx - self.u(8.0), top, sw + self.u(16.0), row_h);
                 }
                 (Kind::Number { unit, .. }, Value::Number(v)) => {
                     let b = self.u(28.0);
@@ -276,8 +313,8 @@ impl SettingsPanel {
                     let minus_x = plus_x - vw - b;
                     for (bx, plus) in [(minus_x, false), (plus_x, true)] {
                         let r = rounded_rect(bx, by, b, b, self.u(4.0));
-                        fill(&mut pm, &mut paint, r.clone(), st.text, 0.08);
-                        stroke(&mut pm, &mut paint, r, st.text, 0.3, 1.0);
+                        fill(&mut cpm, &mut paint, r.clone(), st.text, 0.08);
+                        stroke(&mut cpm, &mut paint, r, st.text, 0.3, 1.0);
                         let (cx, cy, s) = (bx + b / 2.0, by + b / 2.0, self.u(5.0));
                         let mut pb = PathBuilder::new();
                         pb.move_to(cx - s, cy);
@@ -286,12 +323,12 @@ impl SettingsPanel {
                             pb.move_to(cx, cy - s);
                             pb.line_to(cx, cy + s);
                         }
-                        stroke(&mut pm, &mut paint, pb.finish(), st.text, 0.9, self.u(1.5));
-                        hits.push((if plus { Hit::Plus(i) } else { Hit::Minus(i) }, rx + bx, ry + by, b, b));
+                        stroke(&mut cpm, &mut paint, pb.finish(), st.text, 0.9, self.u(1.5));
+                        push_hit(&mut hits, if plus { Hit::Plus(i) } else { Hit::Minus(i) }, rx + bx, by, b, b);
                     }
                     let text = if unit.is_empty() { format!("{v}") } else { format!("{v} {unit}") };
                     let tw = text_width(font, &text, px);
-                    draw_text(&mut pm, font, &text, px, minus_x + b + (vw - tw) / 2.0, baseline_in(by, b, px), st.text, 1.0);
+                    draw_text(&mut cpm, font, &text, px, minus_x + b + (vw - tw) / 2.0, baseline_in(by, b, px), st.text, 1.0);
                 }
                 (Kind::Choice(options), Value::Choice(c)) => {
                     let text = options.get(c).copied().unwrap_or("");
@@ -299,20 +336,28 @@ impl SettingsPanel {
                     let bh = self.u(30.0);
                     let (bx, by) = (right - bw, (mid - bh / 2.0).round());
                     let r = rounded_rect(bx, by, bw, bh, self.u(4.0));
-                    fill(&mut pm, &mut paint, r.clone(), st.text, 0.08);
-                    stroke(&mut pm, &mut paint, r, st.text, 0.3, 1.0);
-                    draw_text(&mut pm, font, text, px, bx + self.u(12.0), baseline_in(by, bh, px), st.text, 1.0);
+                    fill(&mut cpm, &mut paint, r.clone(), st.text, 0.08);
+                    stroke(&mut cpm, &mut paint, r, st.text, 0.3, 1.0);
+                    draw_text(&mut cpm, font, text, px, bx + self.u(12.0), baseline_in(by, bh, px), st.text, 1.0);
                     let (ax, ay, s) = (bx + bw - self.u(16.0), by + bh / 2.0, self.u(4.0));
                     let mut pb = PathBuilder::new();
                     pb.move_to(ax - s, ay - s * 0.5);
                     pb.line_to(ax, ay + s * 0.5);
                     pb.line_to(ax + s, ay - s * 0.5);
-                    stroke(&mut pm, &mut paint, pb.finish(), st.text, 0.8, self.u(1.4));
-                    hits.push((Hit::Choice(i), rx + bx, ry + by, bw, bh));
+                    stroke(&mut cpm, &mut paint, pb.finish(), st.text, 0.8, self.u(1.4));
+                    push_hit(&mut hits, Hit::Choice(i), rx + bx, by, bw, bh);
                 }
                 _ => {}
             }
         }
+        if self.max_scroll > 0.0 {
+            // scroll bar
+            let track = area_h - self.u(8.0);
+            let bar = (track * area_h / content_h).max(self.u(24.0));
+            let y = self.u(4.0) + (track - bar) * self.scroll / self.max_scroll;
+            fill(&mut cpm, &mut paint, rounded_rect(w - self.u(10.0), y, self.u(4.0), bar, self.u(2.0)), st.text, 0.3);
+        }
+        pm.draw_pixmap(0, area_top as i32, cpm.as_ref(), &Default::default(), Transform::identity(), None);
         self.hits = hits;
         Some(pm)
     }

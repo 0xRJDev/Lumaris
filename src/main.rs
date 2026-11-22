@@ -1057,6 +1057,13 @@ impl App {
                 }
             }
             ["settings"] => self.open_settings(),
+            ["settingswheel", steps] => {
+                if let (Some(p), Ok(n)) = (self.settings_panel.as_mut(), steps.parse::<f64>()) {
+                    if p.wheel(n) {
+                        self.sync_overlays();
+                    }
+                }
+            }
             ["apps"] => {
                 for a in apps::for_file(self.files.current()) {
                     println!("APP {} ({})", a.name, a.id);
@@ -1313,7 +1320,16 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. } if self.settings_panel.is_some() => {
                 self.settings_click(self.cursor);
             }
-            WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. } if self.settings_panel.is_some() => {}
+            WindowEvent::MouseWheel { delta, .. } if self.settings_panel.is_some() => {
+                let steps = match delta {
+                    MouseScrollDelta::LineDelta(_, y) => y as f64,
+                    MouseScrollDelta::PixelDelta(p) => p.y / 60.0,
+                };
+                if self.settings_panel.as_mut().is_some_and(|p| p.wheel(steps)) {
+                    self.sync_overlays();
+                }
+            }
+            WindowEvent::MouseInput { .. } if self.settings_panel.is_some() => {}
             WindowEvent::MouseInput { state, button, .. } => match (button, state) {
                 (MouseButton::Right, ElementState::Pressed) => {
                     self.drag = None;
