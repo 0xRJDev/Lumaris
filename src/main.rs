@@ -24,8 +24,8 @@ mod toast;
 mod trash;
 mod ui;
 mod view;
+mod watch;
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,7 +50,8 @@ fn max_aspect() -> f64 {
 }
 
 pub enum UserEvent {
-    Decoded(PathBuf, Result<Arc<Decoded>, String>),
+    /// a decoded image (path, loader generation, result)
+    Decoded(PathBuf, u64, Result<Arc<Decoded>, String>),
     /// SIGINT / SIGTERM: quit normally (unloads the KWin script)
     Quit,
     /// Test script command (LUMARIS_AUTOTEST=<file>, one command per line)
@@ -61,6 +62,10 @@ pub enum UserEvent {
     Open(PathBuf),
     /// mouse input on a menu shown outside the window
     Popup(popup::PopupInput),
+    /// files were added to or removed from this folder
+    FolderChanged(PathBuf),
+    /// a short message to show in the window
+    Message(String),
 }
 
 /// The animation being played: image, current frame, when the next frame is due
@@ -76,7 +81,6 @@ struct App {
     gpu: Option<gpu::Gpu>,
     first: Option<Result<Arc<Decoded>, String>>,
     cache: Vec<(PathBuf, Arc<Decoded>)>,
-    in_flight: HashSet<PathBuf>,
     kwin: Option<kwin::KWin>,
     blur: Option<blur::Blur>, // dropped before the window
     window: Option<Arc<Window>>,
@@ -129,6 +133,8 @@ struct App {
     map_drag: bool,
     /// slideshow fade to a new image: when it started
     fade_start: Option<Instant>,
+    /// watches the folder being browsed for new and removed images
+    watch: watch::Watch,
     _instance: Option<instance::Instance>,
 }
 
@@ -341,8 +347,6 @@ impl App {
         if let Some((_, img)) = self.cache.iter().find(|(p, _)| *p == path) {
             let img = img.clone();
             self.show(event_loop, path, img);
-        } else {
-            self.request(path);
         }
         self.prefetch();
     }
@@ -361,8 +365,75 @@ impl App {
         self.cache.clear();
         self.shown = None;
         self.stop_slideshow();
+        self.watch_folder();
         let k = self.files.index;
         self.go_to_forced(event_loop, k);
+    }
+
+    /// Sets the image as the wallpaper (in the background: the desktop may take a moment).
+    fn set_wallpaper(&mut self, file: PathBuf) {
+        if self.current.is_none() {
+            return;
+        }
+        if archive::archive_of(&file).is_some() {
+            return self.message("Pages of an archive cannot be the wallpaper".into());
+        }
+        let proxy = self.proxy.clone();
+        std::thread::spawn(move || {
+            let text = match desktop::set_wallpaper(&file) {
+                Ok(()) => "Wallpaper set".to_string(),
+                Err(e) => {
+                    eprintln!("lumaris: cannot set the wallpaper: {e}");
+                    format!("Wallpaper not set: {e}")
+                }
+            };
+            let _ = proxy.send_event(UserEvent::Message(text));
+        });
+    }
+
+    /// A short message at the bottom of the window
+    fn message(&mut self, text: String) {
+        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
+        self.toast.message(text, scale);
+        self.sync_overlays();
+    }
+
+    /// Watches the folder of the current image (not the pages of an archive) if enabled
+    fn watch_folder(&self) {
+        let current = self.files.current();
+        let folder = (settings::current().bool("WatchFolder") && archive::archive_of(current).is_none())
+            .then(|| current.parent().map(Path::to_path_buf))
+            .flatten();
+        self.watch.set(folder);
+    }
+
+    /// Files were added to or removed from the watched folder: list it again.
+    fn folder_changed(&mut self, event_loop: &ActiveEventLoop, dir: &Path) {
+        let current = self.files.current().to_path_buf();
+        if current.parent() != Some(dir) {
+            return;
+        }
+        let mut fresh = files::FileList::new(dir).map(|l| l.files).unwrap_or_default();
+        if current.exists() && !fresh.contains(&current) {
+            fresh.push(current.clone()); // opened explicitly (a hidden image, unknown extension)
+        }
+        if !self.files.merge(fresh) {
+            return;
+        }
+        let s = settings::current().clone();
+        if s.choice("SortOrder") != 3 {
+            self.files.sort(s.choice("SortOrder"), s.bool("SortReverse")); // random order: new images at the end
+        }
+        if self.files.current() != current {
+            // the image shown was deleted or renamed: show the next one
+            self.shown = None;
+            let k = self.files.index;
+            self.go_to_forced(event_loop, k);
+        } else {
+            self.prefetch();
+            self.refresh_info();
+            self.redraw();
+        }
     }
 
     /// The open dialog (in the background); the chosen file arrives as UserEvent::Open
@@ -467,6 +538,7 @@ impl App {
             Open => self.open_dialog(),
             OpenFolder => self.run(event_loop, menu::Action::OpenFolder),
             Trash => self.move_to_trash(event_loop),
+            Wallpaper => self.run(event_loop, menu::Action::Wallpaper),
             Close => {
                 if self.help.is_some() {
                     self.toggle_help();
@@ -609,36 +681,69 @@ impl App {
         if let Some((_, img)) = self.cache.iter().find(|(p, _)| *p == path) {
             let img = img.clone();
             self.show(event_loop, path, img);
-        } else {
-            self.request(path);
         }
         self.prefetch();
     }
 
-    fn request(&mut self, path: PathBuf) {
-        if self.in_flight.insert(path.clone()) {
-            self.loader.request(path);
+    /// Asks the loader for the current image and its neighbours (nearest first) that are not
+    /// decoded yet, as far as the memory limit allows, and drops images no longer needed.
+    fn prefetch(&mut self) {
+        self.trim_cache();
+        let ahead = settings::current().number("Prefetch") as isize;
+        let limit = Self::memory_limit();
+        let mut used: usize = self.cache.iter().map(|(_, img)| Self::image_bytes(img)).sum();
+        // neighbours are guessed to be the size of the current image
+        let guess = self.current.as_ref().map(|img| Self::image_bytes(img)).unwrap_or(0);
+        let mut wanted = vec![self.files.index];
+        wanted.extend((1..=ahead).flat_map(|d| [self.neighbour(d), self.neighbour(-d)]).flatten());
+        let mut paths: Vec<PathBuf> = Vec::new();
+        for (n, k) in wanted.into_iter().enumerate() {
+            let p = &self.files.files[k];
+            if paths.contains(p) || self.cache.iter().any(|(c, _)| c == p) {
+                continue;
+            }
+            if n > 0 {
+                if used + guess > limit {
+                    break;
+                }
+                used += guess;
+            }
+            paths.push(p.clone());
         }
+        self.loader.want(paths);
     }
 
-    fn prefetch(&mut self) {
+    fn memory_limit() -> usize {
+        (settings::current().number("MemoryLimit") * 1024.0 * 1024.0) as usize
+    }
+
+    fn image_bytes(img: &Decoded) -> usize {
+        img.rgba.len() + img.frames.iter().map(|f| f.rgba.len()).sum::<usize>()
+    }
+
+    /// Keeps the decoded images near the current one (the folder may loop), nearest first, within
+    /// the memory limit. The current image always stays.
+    fn trim_cache(&mut self) {
         let (i, n) = (self.files.index, self.files.files.len());
-        let ahead = settings::current().number("Prefetch") as isize;
-        let wanted: Vec<usize> = (1..=ahead).flat_map(|d| [self.neighbour(d), self.neighbour(-d)]).flatten().collect();
-        for k in wanted {
-            let p = self.files.files[k].clone();
-            if !self.cache.iter().any(|(c, _)| *c == p) {
-                self.request(p);
+        let ahead = settings::current().number("Prefetch") as usize;
+        let files = &self.files.files;
+        let distance = |p: &PathBuf| {
+            files.iter().position(|f| f == p).map(|k| {
+                let d = k.abs_diff(i);
+                d.min(n - d)
+            })
+        };
+        let mut kept: Vec<(usize, (PathBuf, Arc<Decoded>))> =
+            self.cache.drain(..).filter_map(|e| distance(&e.0).filter(|d| *d <= ahead + 1).map(|d| (d, e))).collect();
+        kept.sort_by_key(|(d, _)| *d);
+        let limit = Self::memory_limit();
+        let mut used = 0;
+        for (d, e) in kept {
+            used += Self::image_bytes(&e.1);
+            if d == 0 || used <= limit {
+                self.cache.push(e);
             }
         }
-        // drop images far from the current one (the folder may loop)
-        let files = &self.files.files;
-        self.cache.retain(|(p, _)| {
-            files.iter().position(|f| f == p).is_some_and(|k| {
-                let d = k.abs_diff(i);
-                d.min(n - d) <= ahead as usize + 1
-            })
-        });
     }
 
     /// Index `delta` images away, looping through the folder if enabled
@@ -688,6 +793,7 @@ impl App {
         let s = settings::current().clone();
         self.view.configure(s.choice("FitMode") == 1, s.bool("SmoothZoom"));
         self.loop_folder = s.bool("LoopFolder");
+        self.watch_folder();
         self.navigation_panel = s.bool("NavigationPanel");
         if let (Some(r), Some(w)) = (self.renderer.as_mut(), self.window.clone()) {
             r.set_pixel_art(s.bool("PixelArt"), s.number("PixelArtMaxSize") as u32);
@@ -732,8 +838,7 @@ impl App {
             // decode again with the new settings
             self.cache.clear();
             self.shown = None;
-            let path = self.files.current().to_path_buf();
-            self.request(path);
+            self.loader.invalidate();
             self.prefetch();
         }
         if old.is_some() && (changed("MaxWindowSize") || changed("MaxWindowAspect") || changed("FitMode")) && self.view.is_fit() {
@@ -806,6 +911,7 @@ impl App {
             image_item(Item::new("Copy image", &km.shortcut(keys::Command::CopyImage), Action::CopyImage)),
             Item::new("Copy file path", &km.shortcut(keys::Command::CopyPath), Action::CopyPath),
             image_item(Item::new("Move to trash", &km.shortcut(keys::Command::Trash), Action::Trash)),
+            image_item(Item::new("Set as wallpaper", &km.shortcut(keys::Command::Wallpaper), Action::Wallpaper)),
             Item::separator(),
             Item::new("Next image", &km.shortcut(keys::Command::Next), Action::Next),
             Item::new("Previous image", &km.shortcut(keys::Command::Previous), Action::Previous),
@@ -989,6 +1095,7 @@ impl App {
             Action::Choice(_) => {}
             Action::Open => self.open_dialog(),
             Action::Trash => self.move_to_trash(event_loop),
+            Action::Wallpaper => self.set_wallpaper(file),
             Action::RotateRight => self.command(event_loop, keys::Command::RotateRight),
             Action::RotateLeft => self.command(event_loop, keys::Command::RotateLeft),
             Action::FlipHorizontal => self.command(event_loop, keys::Command::FlipHorizontal),
@@ -1276,7 +1383,12 @@ impl ApplicationHandler<UserEvent> for App {
 
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         let (path, result) = match event {
-            UserEvent::Decoded(path, result) => (path, result),
+            UserEvent::Decoded(path, generation, result) => {
+                if generation != self.loader.generation() {
+                    return; // decoded with settings that changed since
+                }
+                (path, result)
+            }
             UserEvent::Quit => return event_loop.exit(),
             UserEvent::Test(cmd) => return self.test_command(event_loop, &cmd),
             UserEvent::Popup(input) => {
@@ -1292,6 +1404,14 @@ impl ApplicationHandler<UserEvent> for App {
                         self.menu_click(event_loop, at, !left);
                     }
                 }
+                return;
+            }
+            UserEvent::Message(text) => {
+                self.message(text);
+                return;
+            }
+            UserEvent::FolderChanged(dir) => {
+                self.folder_changed(event_loop, &dir);
                 return;
             }
             UserEvent::Open(path) => {
@@ -1311,12 +1431,12 @@ impl ApplicationHandler<UserEvent> for App {
                 return;
             }
         };
-        self.in_flight.remove(&path);
         let current = self.files.current() == path;
         match result {
             Ok(img) => {
                 if !self.cache.iter().any(|(p, _)| *p == path) {
                     self.cache.push((path.clone(), img.clone()));
+                    self.trim_cache();
                 }
                 if current && self.shown.as_ref() != Some(&path) {
                     self.show(event_loop, path, img);
@@ -1565,6 +1685,11 @@ fn main() {
         println!("Lumaris {}", env!("CARGO_PKG_VERSION"));
         return;
     }
+    // an image file: start decoding it at once, while its folder is listed
+    let early = std::fs::canonicalize(&arg).ok().filter(|p| p.is_file() && !archive::is_archive(p)).map(|p| {
+        let path = p.clone();
+        (p, std::thread::spawn(move || decode::decode_for_display(&path)))
+    });
     let Some(files) = files::FileList::new(Path::new(&arg)) else {
         eprintln!("lumaris: no images found: {}", Path::new(&arg).display());
         std::process::exit(1);
@@ -1606,12 +1731,13 @@ fn main() {
         });
     }
     // decode the first image while the GPU starts up
-    let first_path = files.current().to_path_buf();
-    let first = std::thread::spawn(move || {
-        std::panic::catch_unwind(|| decode::decode(&first_path))
-            .unwrap_or_else(|_| Err("the file could not be decoded".into()))
-            .map(Arc::new)
-    });
+    let first = match early {
+        Some((path, decoding)) if path == files.current() => decoding,
+        _ => {
+            let path = files.current().to_path_buf();
+            std::thread::spawn(move || decode::decode_for_display(&path))
+        }
+    };
     let gpu = match pollster::block_on(gpu::Gpu::new()) {
         Ok(g) => g,
         Err(e) => {
@@ -1619,6 +1745,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    decode::set_max_texture(gpu.max_texture_side());
     let timing = std::env::var_os("LUMARIS_DEBUG_TIMING").is_some();
     if timing {
         eprintln!("lumaris: GPU ready after {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
@@ -1631,10 +1758,10 @@ fn main() {
     let mut app = App {
         files,
         loader: Loader::new(threads, event_loop.create_proxy()),
+        watch: watch::Watch::start(event_loop.create_proxy()),
         gpu: Some(gpu),
         first: Some(first),
         cache: Vec::new(),
-        in_flight: HashSet::new(),
         kwin: kwin.join().ok().flatten(),
         blur: None,
         window: None,

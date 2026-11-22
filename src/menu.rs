@@ -28,6 +28,7 @@ pub enum Action {
     Choice(usize),
     Open,
     Trash,
+    Wallpaper,
     RotateRight,
     RotateLeft,
     FlipHorizontal,

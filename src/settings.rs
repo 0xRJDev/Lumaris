@@ -148,6 +148,14 @@ pub const DEFS: &[Def] = &[
         B(true),
         "Leave out images whose name starts with a dot (.image.png), unless you open one directly"
     ),
+    def!(
+        "Navigation",
+        "WatchFolder",
+        "Follow changes in the folder",
+        Bool,
+        B(true),
+        "Images added to or removed from the folder (by other programs) appear and disappear while browsing"
+    ),
     def!("Navigation", "SortOrder", "Sort order", Choice(SORT), C(0), "Order of the images of a folder"),
     def!("Navigation", "SortReverse", "Reverse sort order", Bool, B(false), "Sort in reverse order"),
     def!(
@@ -195,6 +203,14 @@ pub const DEFS: &[Def] = &[
         Number { min: 0.0, max: 3.0, step: 1.0, unit: "" },
         N(1.0),
         "How many images before and after the current one are decoded in advance"
+    ),
+    def!(
+        "Advanced",
+        "MemoryLimit",
+        "Memory for decoded images",
+        Number { min: 256.0, max: 16384.0, step: 256.0, unit: "MB" },
+        N(1024.0),
+        "Images decoded in advance are kept only while they fit in this much memory (the current image always stays)"
     ),
 ];
 

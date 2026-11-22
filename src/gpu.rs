@@ -16,6 +16,11 @@ pub struct Gpu {
 }
 
 impl Gpu {
+    /// Largest texture width or height
+    pub fn max_texture_side(&self) -> u32 {
+        self.device.limits().max_texture_dimension_2d
+    }
+
     /// Created before the window exists, in parallel with decoding the first image.
     /// Vulkan first; OpenGL only when there is no Vulkan driver (starting both costs ~50 ms).
     pub async fn new() -> Result<Gpu, String> {

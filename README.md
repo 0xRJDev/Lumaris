@@ -55,9 +55,11 @@ choose it in **System Settings → Default Applications**.
   menu in your KDE colours and font that can reach beyond the window.
 - **Browsing:** next and previous in natural order (`img2` before `img10`), sort orders, looping,
   slideshows with fades, and comic archives (.cbz) that open like a folder. Hidden images
-  (`.image.png`) are skipped unless you open one directly.
+  (`.image.png`) are skipped unless you open one directly, and images that other programs add to
+  or remove from the folder appear and disappear while you browse.
 - **Desktop tools:** open with your apps (default first), open the folder, copy the image or its
-  path, move to the trash, drag and drop, and your own commands on keys.
+  path, move to the trash, set as wallpaper (KDE Plasma, GNOME), drag and drop, and your own
+  commands on keys.
 - **Details on demand:** image info with camera details and a histogram, a navigation panel with a
   zoom map, rotate and flip.
 - **Private by design:** no history, no thumbnails, no recent files. The only thing it writes is

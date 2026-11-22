@@ -34,6 +34,7 @@ pub enum Command {
     Open,
     OpenFolder,
     Trash,
+    Wallpaper,
     Close,
     Quit,
 }
@@ -69,6 +70,7 @@ pub const COMMANDS: &[(Command, &str, &str, &[&str])] = &[
     (Open, "Open", "Open image", &["Ctrl+O"]),
     (OpenFolder, "OpenFolder", "Open containing folder", &["Ctrl+E"]),
     (Trash, "Trash", "Move to trash", &["Delete"]),
+    (Wallpaper, "Wallpaper", "Set as wallpaper", &[]),
     (Close, "Close", "Close panel, stop slideshow, leave full screen, quit", &["Escape"]),
     (Quit, "Quit", "Quit", &["Ctrl+Q"]),
 ];

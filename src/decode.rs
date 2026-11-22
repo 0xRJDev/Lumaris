@@ -1,7 +1,9 @@
 // Image decoding on worker threads.
+use std::collections::{HashMap, VecDeque};
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
@@ -448,36 +450,133 @@ fn decode_jxl(path: &Path) -> Result<Decoded, String> {
     Ok(d)
 }
 
-/// Decodes requested files on background threads; results arrive as `UserEvent::Decoded`.
+/// Largest texture side the GPU takes (0: not known yet). Larger images are reduced on the
+/// decoder threads, so showing them does not stall the window.
+static MAX_TEXTURE: AtomicU32 = AtomicU32::new(0);
+
+pub fn set_max_texture(side: u32) {
+    MAX_TEXTURE.store(side, Ordering::Relaxed);
+}
+
+/// Reduces a still raster image to the GPU's texture limit; `width`/`height` keep the real size.
+fn fit_to_gpu(d: &mut Decoded) {
+    let max = MAX_TEXTURE.load(Ordering::Relaxed);
+    if max == 0 || d.vector.is_some() || !d.frames.is_empty() || (d.pixel_width <= max && d.pixel_height <= max) {
+        return;
+    }
+    let Some(src) = image::RgbaImage::from_raw(d.pixel_width, d.pixel_height, std::mem::take(&mut d.rgba)) else { return };
+    let s = max as f64 / d.pixel_width.max(d.pixel_height) as f64;
+    let (w, h) = (((d.pixel_width as f64 * s) as u32).clamp(1, max), ((d.pixel_height as f64 * s) as u32).clamp(1, max));
+    d.rgba = image::imageops::resize(&src, w, h, image::imageops::FilterType::Triangle).into_raw();
+    (d.pixel_width, d.pixel_height) = (w, h);
+}
+
+/// Decodes on worker threads and sends the results as `UserEvent::Decoded`.
+pub fn decode_for_display(path: &Path) -> Result<Arc<Decoded>, String> {
+    // a crashing decoder (damaged file) must not end Lumaris
+    std::panic::catch_unwind(|| decode(path)).unwrap_or_else(|_| Err("the file could not be decoded".into())).map(|mut d| {
+        fit_to_gpu(&mut d);
+        Arc::new(d)
+    })
+}
+
+#[derive(Default)]
+struct Queue {
+    /// waiting, most wanted first
+    waiting: VecDeque<PathBuf>,
+    /// being decoded, with the generation they were started in
+    running: HashMap<PathBuf, u64>,
+    generation: u64,
+}
+
+/// Decodes the wanted files on background threads, most wanted first. Each `want` replaces the
+/// waiting list, so images skipped past while browsing quickly are never decoded.
 pub struct Loader {
-    tx: mpsc::Sender<PathBuf>,
+    shared: Arc<(Mutex<Queue>, Condvar)>,
 }
 
 impl Loader {
     pub fn new(threads: usize, proxy: EventLoopProxy<UserEvent>) -> Loader {
-        let (tx, rx) = mpsc::channel::<PathBuf>();
-        let rx = Arc::new(Mutex::new(rx));
+        let shared = Arc::new((Mutex::new(Queue::default()), Condvar::new()));
         for _ in 0..threads {
-            let rx = rx.clone();
+            let shared = shared.clone();
             let proxy = proxy.clone();
             thread::spawn(move || {
+                let (lock, wake) = &*shared;
                 loop {
-                    let next = rx.lock().unwrap().recv();
-                    let Ok(path) = next else { break };
-                    // a crashing decoder (damaged file) must not end Lumaris
-                    let result = std::panic::catch_unwind(|| decode(&path))
-                        .unwrap_or_else(|_| Err("the file could not be decoded".into()))
-                        .map(Arc::new);
-                    if proxy.send_event(UserEvent::Decoded(path, result)).is_err() {
+                    let (path, generation) = {
+                        let mut q = lock.lock().unwrap();
+                        loop {
+                            if let Some(p) = q.waiting.pop_front() {
+                                let g = q.generation;
+                                q.running.insert(p.clone(), g);
+                                break (p, g);
+                            }
+                            q = wake.wait(q).unwrap();
+                        }
+                    };
+                    let result = decode_for_display(&path);
+                    {
+                        let mut q = lock.lock().unwrap();
+                        if q.running.get(&path) == Some(&generation) {
+                            q.running.remove(&path);
+                        }
+                    }
+                    if proxy.send_event(UserEvent::Decoded(path, generation, result)).is_err() {
                         break;
                     }
                 }
             });
         }
-        Loader { tx }
+        Loader { shared }
     }
 
-    pub fn request(&self, path: PathBuf) {
-        let _ = self.tx.send(path);
+    /// The files to decode, most wanted first (replaces what is still waiting). Files being
+    /// decoded already are not decoded again.
+    pub fn want(&self, paths: Vec<PathBuf>) {
+        let (lock, wake) = &*self.shared;
+        let mut q = lock.lock().unwrap();
+        let generation = q.generation;
+        let waiting = paths.into_iter().filter(|p| q.running.get(p) != Some(&generation)).collect();
+        q.waiting = waiting;
+        wake.notify_all();
+    }
+
+    /// Results of decodes started before this are outdated (the settings changed).
+    pub fn invalidate(&self) {
+        let mut q = self.shared.0.lock().unwrap();
+        q.generation += 1;
+        q.waiting.clear();
+    }
+
+    pub fn generation(&self) -> u64 {
+        self.shared.0.lock().unwrap().generation
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reduced_to_gpu_limit() {
+        let still = |w: u32, h: u32| Decoded {
+            width: w,
+            height: h,
+            rgba: vec![255; (w * h * 4) as usize],
+            frames: Vec::new(),
+            vector: None,
+            pixel_width: w,
+            pixel_height: h,
+        };
+        set_max_texture(100);
+        let mut big = still(300, 50);
+        fit_to_gpu(&mut big);
+        assert_eq!((big.width, big.height, big.pixel_width, big.pixel_height), (300, 50, 100, 16));
+        assert_eq!(big.rgba.len(), 100 * 16 * 4);
+        let mut small = still(80, 60);
+        fit_to_gpu(&mut small);
+        assert_eq!((small.pixel_width, small.pixel_height), (80, 60));
+        set_max_texture(0);
     }
 }

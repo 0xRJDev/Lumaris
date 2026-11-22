@@ -31,6 +31,12 @@ impl Toast {
         false
     }
 
+    /// Shows a message for longer than the zoom (time to read it).
+    pub fn message(&mut self, text: String, scale: f64) {
+        self.show(text, scale);
+        self.until = Some(Instant::now() + SHOW_FOR * 3);
+    }
+
     pub fn deadline(&self) -> Option<Instant> {
         self.until
     }

@@ -40,7 +40,7 @@ impl FileList {
                 .filter(|name| !skip_hidden || !name.split('/').any(|part| part.starts_with('.')))
                 .map(|name| arg.join(name))
                 .collect();
-            files.sort_by(|a, b| natural_cmp(&a.to_string_lossy().to_lowercase(), &b.to_string_lossy().to_lowercase()));
+            sort_by_path(&mut files);
             return (!files.is_empty()).then_some(FileList { files, index: 0 });
         }
         let (dir, start) = if arg.is_dir() { (arg.clone(), None) } else { (arg.parent()?.to_path_buf(), Some(arg)) };
@@ -58,7 +58,7 @@ impl FileList {
         {
             files.push(s.clone()); // opened explicitly: show it even with an unknown extension
         }
-        files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
+        sort_by_name(&mut files);
         if files.is_empty() {
             return None;
         }
@@ -82,9 +82,9 @@ impl FileList {
                         m.map(|m| m.len() as u128).unwrap_or(0)
                     }
                 };
-                let mut keyed: Vec<(u128, PathBuf)> = self.files.drain(..).map(|p| (key(&p), p)).collect();
-                keyed.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| natural_cmp(&file_name(&a.1), &file_name(&b.1))));
-                self.files = keyed.into_iter().map(|(_, p)| p).collect();
+                // name order first, so equal keys stay in name order (the sort is stable)
+                sort_by_name(&mut self.files);
+                self.files.sort_by_cached_key(key);
             }
             3 => {
                 // shuffle (xorshift, seeded by the clock)
@@ -97,12 +97,34 @@ impl FileList {
                     self.files.swap(i, (x % (i as u64 + 1)) as usize);
                 }
             }
-            _ => self.files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b))),
+            _ => sort_by_name(&mut self.files),
         }
         if reverse && order != 3 {
             self.files.reverse();
         }
         self.index = self.files.iter().position(|p| *p == current).unwrap_or(0);
+    }
+
+    /// Takes a new listing of the folder: files still there keep their order, new ones are added
+    /// at the end. Stays on the current file, or on the one after it when it is gone. Returns
+    /// whether anything changed.
+    pub fn merge(&mut self, fresh: Vec<PathBuf>) -> bool {
+        let present: std::collections::HashSet<&PathBuf> = fresh.iter().collect();
+        let old: std::collections::HashSet<&PathBuf> = self.files.iter().collect();
+        let added: Vec<PathBuf> = fresh.iter().filter(|p| !old.contains(p)).cloned().collect();
+        if added.is_empty() && self.files.iter().all(|p| present.contains(p)) {
+            return false;
+        }
+        let current = self.current().to_path_buf();
+        let before_current = self.files[..self.index].iter().filter(|p| present.contains(p)).count();
+        let mut files: Vec<PathBuf> = self.files.iter().filter(|p| present.contains(p)).cloned().collect();
+        files.extend(added);
+        if files.is_empty() {
+            return false; // nothing left: keep showing what was there
+        }
+        self.index = files.iter().position(|p| *p == current).unwrap_or(before_current.min(files.len() - 1));
+        self.files = files;
+        true
     }
 
     /// Lists the folder (or comic archive) of the current image again, staying on that image.
@@ -114,7 +136,7 @@ impl FileList {
             list.index = i;
         } else if source != current {
             list.files.push(current.to_path_buf()); // hidden page that was being shown
-            list.files.sort_by(|a, b| natural_cmp(&a.to_string_lossy().to_lowercase(), &b.to_string_lossy().to_lowercase()));
+            sort_by_path(&mut list.files);
             list.index = list.files.iter().position(|p| p == current).unwrap_or(0);
         }
         Some(list)
@@ -123,6 +145,32 @@ impl FileList {
     pub fn current(&self) -> &Path {
         &self.files[self.index]
     }
+}
+
+/// A string that sorts in natural order
+#[derive(PartialEq, Eq)]
+struct Natural(String);
+
+impl Ord for Natural {
+    fn cmp(&self, other: &Self) -> Ordering {
+        natural_cmp(&self.0, &other.0)
+    }
+}
+
+impl PartialOrd for Natural {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Natural order of file names; each name is lowercased once, not in every comparison.
+fn sort_by_name(files: &mut [PathBuf]) {
+    files.sort_by_cached_key(|p| Natural(file_name(p)));
+}
+
+/// Natural order of whole paths (pages of an archive, which may be in folders)
+fn sort_by_path(files: &mut [PathBuf]) {
+    files.sort_by_cached_key(|p| Natural(p.to_string_lossy().to_lowercase()));
 }
 
 fn file_name(p: &Path) -> String {
@@ -189,5 +237,27 @@ mod tests {
         assert_eq!(file_name(l.current()), ".b.png");
         assert_eq!(l.files.len(), 3);
         std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn merge_listing() {
+        let p = |n: &str| PathBuf::from(format!("/f/{n}"));
+        let mut l = FileList { files: vec![p("a"), p("b"), p("c")], index: 1 };
+        assert!(!l.merge(vec![p("c"), p("a"), p("b")]));
+        // b deleted, d added: stays in place, on the image after b
+        assert!(l.merge(vec![p("a"), p("c"), p("d")]));
+        assert_eq!(l.files, [p("a"), p("c"), p("d")]);
+        assert_eq!(l.current(), p("c"));
+        // d renamed to e while on c
+        assert!(l.merge(vec![p("a"), p("c"), p("e")]));
+        assert_eq!(l.files, [p("a"), p("c"), p("e")]);
+        assert_eq!(l.current(), p("c"));
+    }
+
+    #[test]
+    fn sorting_by_name() {
+        let mut v: Vec<PathBuf> = ["B10.png", "b2.png", "a.png"].iter().map(PathBuf::from).collect();
+        sort_by_name(&mut v);
+        assert_eq!(v, [PathBuf::from("a.png"), PathBuf::from("b2.png"), PathBuf::from("B10.png")]);
     }
 }

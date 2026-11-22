@@ -4,6 +4,17 @@
 
 - Hidden images (name starting with a dot) are skipped while browsing; opening one directly still
   works. Setting: Navigation → Skip hidden images (on by default)
+- Follows changes in the folder: images added or removed by other programs appear and disappear
+  (Navigation → Follow changes in the folder)
+- Set as wallpaper (right-click menu; KDE Plasma and GNOME)
+- Faster browsing: the image you stop on is decoded first, images skipped past are not decoded
+- Images larger than the GPU allows are reduced while decoding, so showing them no longer pauses
+  the window
+- Memory limit for images decoded in advance (Advanced → Memory for decoded images, 1 GB)
+- The opened image starts decoding before its folder is listed (faster start in large folders)
+- Faster sorting of large folders
+- More file type names in the desktop entry (BMP, ICO, TGA, PSD, camera RAW variants), so file
+  managers offer Lumaris for them
 
 ## 0.1.0
 
