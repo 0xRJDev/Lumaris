@@ -51,7 +51,15 @@ pub struct Item {
 
 impl Item {
     pub fn new(label: &str, shortcut: &str, action: Action) -> Item {
-        Item { label: label.into(), shortcut: shortcut.into(), action: Some(action), children: Vec::new(), checked: None, separator: false, enabled: true }
+        Item {
+            label: label.into(),
+            shortcut: shortcut.into(),
+            action: Some(action),
+            children: Vec::new(),
+            checked: None,
+            separator: false,
+            enabled: true,
+        }
     }
     pub fn check(label: &str, shortcut: &str, action: Action, checked: bool) -> Item {
         Item { checked: Some(checked), ..Item::new(label, shortcut, action) }
@@ -155,7 +163,13 @@ impl Menu {
 
     /// Window size needed to show the menu with its widest submenu beside it
     pub fn needed_size(items: &[Item], scale: f64) -> (u32, u32) {
-        let m = Menu { levels: Vec::new(), scale: scale as f32, window: (f32::MAX, f32::MAX), bounds: (0.0, 0.0, f32::MAX, f32::MAX), version: 0 };
+        let m = Menu {
+            levels: Vec::new(),
+            scale: scale as f32,
+            window: (f32::MAX, f32::MAX),
+            bounds: (0.0, 0.0, f32::MAX, f32::MAX),
+            version: 0,
+        };
         let (w, h, tops) = m.measure(items);
         let (mut sub_w, mut bottom) = (0.0f32, h);
         for (it, top) in items.iter().zip(&tops) {
@@ -176,9 +190,19 @@ impl Menu {
         let x = match parent {
             // submenu: right of the parent, or left when there is no room
             Some((left, right)) => {
-                if right - pad + w <= bx1 || left + pad - w < bx0 { right - pad } else { left + pad - w }
+                if right - pad + w <= bx1 || left + pad - w < bx0 {
+                    right - pad
+                } else {
+                    left + pad - w
+                }
             }
-            None => if x + w > bx1 { (x - w).max(bx0) } else { x },
+            None => {
+                if x + w > bx1 {
+                    (x - w).max(bx0)
+                } else {
+                    x
+                }
+            }
         };
         let x = x.min(bx1 - w).max(bx0).round();
         let y = (if y + h > by1 { (by1 - h).max(by0) } else { y }).max(by0).round();
@@ -321,10 +345,7 @@ impl Menu {
                 self.levels[i].pixmap = pm;
             }
         }
-        self.levels
-            .iter()
-            .filter_map(|l| l.pixmap.as_ref().map(|p| (p.data(), p.width(), p.height(), l.x as i32, l.y as i32)))
-            .collect()
+        self.levels.iter().filter_map(|l| l.pixmap.as_ref().map(|p| (p.data(), p.width(), p.height(), l.x as i32, l.y as i32))).collect()
     }
 
     fn paint(&self, li: usize) -> Option<Pixmap> {
@@ -355,13 +376,11 @@ impl Menu {
                 continue;
             }
             let hovered = l.hover == Some(i);
-            if hovered {
-                if let Some(path) = rounded_rect(pad, top, w - 2.0 * pad, ih, self.unit(3.0)) {
-                    paint.set_color(color(st.selection, 0.35));
-                    pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
-                    paint.set_color(color(st.selection, 0.9));
-                    pm.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
-                }
+            if hovered && let Some(path) = rounded_rect(pad, top, w - 2.0 * pad, ih, self.unit(3.0)) {
+                paint.set_color(color(st.selection, 0.35));
+                pm.fill_path(&path, &paint, FillRule::Winding, Transform::identity(), None);
+                paint.set_color(color(st.selection, 0.9));
+                pm.stroke_path(&path, &paint, &Stroke { width: 1.0, ..Default::default() }, Transform::identity(), None);
             }
             let fg = if hovered { st.selection_text } else { st.text };
             let alpha = if it.enabled { 1.0 } else { 0.45 };

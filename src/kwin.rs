@@ -54,7 +54,13 @@ impl KWin {
             .build()
             .ok()?;
         let has_kwin: bool = conn
-            .call_method(Some("org.freedesktop.DBus"), "/org/freedesktop/DBus", Some("org.freedesktop.DBus"), "NameHasOwner", &("org.kde.KWin",))
+            .call_method(
+                Some("org.freedesktop.DBus"),
+                "/org/freedesktop/DBus",
+                Some("org.freedesktop.DBus"),
+                "NameHasOwner",
+                &("org.kde.KWin",),
+            )
             .ok()?
             .body()
             .deserialize()
@@ -71,7 +77,13 @@ impl KWin {
         std::fs::write(&path, script).ok()?;
         let loaded = (|| {
             let id: i32 = conn
-                .call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "loadScript", &(path.to_str()?, name.as_str()))
+                .call_method(
+                    Some("org.kde.KWin"),
+                    "/Scripting",
+                    Some("org.kde.kwin.Scripting"),
+                    "loadScript",
+                    &(path.to_str()?, name.as_str()),
+                )
                 .ok()?
                 .body()
                 .deserialize()
@@ -100,14 +112,25 @@ impl KWin {
         if std::fs::write(&path, js).is_err() {
             return;
         }
-        if let Ok(reply) = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "loadScript", &(path.to_str().unwrap_or(""), name.as_str())) {
-            if let Ok(id) = reply.body().deserialize::<i32>() {
-                if id >= 0 {
-                    let _ = self.conn.call_method(Some("org.kde.KWin"), format!("/Scripting/Script{id}").as_str(), Some("org.kde.kwin.Script"), "run", &());
-                }
-            }
+        if let Ok(reply) = self.conn.call_method(
+            Some("org.kde.KWin"),
+            "/Scripting",
+            Some("org.kde.kwin.Scripting"),
+            "loadScript",
+            &(path.to_str().unwrap_or(""), name.as_str()),
+        ) && let Ok(id) = reply.body().deserialize::<i32>()
+            && id >= 0
+        {
+            let _ = self.conn.call_method(
+                Some("org.kde.KWin"),
+                format!("/Scripting/Script{id}").as_str(),
+                Some("org.kde.kwin.Script"),
+                "run",
+                &(),
+            );
         }
-        let _ = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(name.as_str(),));
+        let _ =
+            self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(name.as_str(),));
         let _ = std::fs::remove_file(&path);
     }
 
@@ -128,7 +151,13 @@ impl KWin {
 
 impl Drop for KWin {
     fn drop(&mut self) {
-        let _ = self.conn.call_method(Some("org.kde.KWin"), "/Scripting", Some("org.kde.kwin.Scripting"), "unloadScript", &(self.name.as_str(),));
+        let _ = self.conn.call_method(
+            Some("org.kde.KWin"),
+            "/Scripting",
+            Some("org.kde.kwin.Scripting"),
+            "unloadScript",
+            &(self.name.as_str(),),
+        );
     }
 }
 

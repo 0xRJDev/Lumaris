@@ -116,10 +116,10 @@ impl Panel {
 
     /// A click: the command of a button, or a position in the zoom map (fractions of the image)
     pub fn click(&self, p: (f64, f64)) -> Option<Result<Command, (f64, f64)>> {
-        if self.visible() {
-            if let Some(i) = self.button_at(p) {
-                return Some(Ok(BUTTONS[i]));
-            }
+        if self.visible()
+            && let Some(i) = self.button_at(p)
+        {
+            return Some(Ok(BUTTONS[i]));
         }
         self.map_position(p).map(Err)
     }
@@ -139,7 +139,12 @@ impl Panel {
         }
         let (w, h) = (t.width() as f32, t.height() as f32);
         let m = self.u(16.0);
-        Some((self.window.0 as f32 - w - m, self.window.1 as f32 - h - m - if self.visible() { self.bar_rect().3 + self.u(8.0) } else { 0.0 }, w, h))
+        Some((
+            self.window.0 as f32 - w - m,
+            self.window.1 as f32 - h - m - if self.visible() { self.bar_rect().3 + self.u(8.0) } else { 0.0 },
+            w,
+            h,
+        ))
     }
 
     /// New image (straight alpha RGBA) for the zoom map. `orient` as in the renderer.
@@ -161,7 +166,7 @@ impl Panel {
         };
         let (tw, th) = t.dimensions();
         let Some(mut pm) = Pixmap::new(tw, th) else { return };
-        for (d, s) in pm.data_mut().chunks_exact_mut(4).zip(t.pixels()) {
+        for (d, s) in pm.data_mut().as_chunks_mut::<4>().0.iter_mut().zip(t.pixels()) {
             let a = s.0[3] as u32;
             d[0] = (s.0[0] as u32 * a / 255) as u8;
             d[1] = (s.0[1] as u32 * a / 255) as u8;
@@ -186,7 +191,12 @@ impl Panel {
         let (ww, wh) = (self.window.0 as f32, self.window.1 as f32);
         let (w, h) = (rect[2] - rect[0], rect[3] - rect[1]);
         let v = if w > ww + 1.0 || h > wh + 1.0 {
-            Some([(-rect[0] / w).clamp(0.0, 1.0), (-rect[1] / h).clamp(0.0, 1.0), ((ww - rect[0]) / w).clamp(0.0, 1.0), ((wh - rect[1]) / h).clamp(0.0, 1.0)])
+            Some([
+                (-rect[0] / w).clamp(0.0, 1.0),
+                (-rect[1] / h).clamp(0.0, 1.0),
+                ((ww - rect[0]) / w).clamp(0.0, 1.0),
+                ((wh - rect[1]) / h).clamp(0.0, 1.0),
+            ])
         } else {
             None
         };
@@ -211,10 +221,10 @@ impl Panel {
         }
         let (bx, by, _, _) = self.bar_rect();
         let map_pos = self.map_rect();
-        if self.visible() {
-            if let Some(b) = &self.bar {
-                out.push((b.data(), b.width(), b.height(), bx as i32, by as i32));
-            }
+        if self.visible()
+            && let Some(b) = &self.bar
+        {
+            out.push((b.data(), b.width(), b.height(), bx as i32, by as i32));
         }
         if let (Some(m), Some((mx, my, _, _))) = (&self.map, map_pos) {
             let pad = self.u(4.0);
@@ -261,11 +271,11 @@ impl Panel {
         for (i, cmd) in BUTTONS.iter().enumerate() {
             let (x, y, s, _) = self.button_rect(i);
             let (x, y) = (x - bx, y - by);
-            if self.hover == Some(i) {
-                if let Some(r) = rounded_rect(x, y, s, s, self.u(5.0)) {
-                    paint.set_color(color(st.selection, 0.35));
-                    pm.fill_path(&r, &paint, FillRule::Winding, Transform::identity(), None);
-                }
+            if self.hover == Some(i)
+                && let Some(r) = rounded_rect(x, y, s, s, self.u(5.0))
+            {
+                paint.set_color(color(st.selection, 0.35));
+                pm.fill_path(&r, &paint, FillRule::Winding, Transform::identity(), None);
             }
             self.icon(&mut pm, *cmd, x + s / 2.0, y + s / 2.0, st.text);
         }

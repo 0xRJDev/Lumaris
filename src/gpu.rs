@@ -131,7 +131,12 @@ impl Renderer {
         let format = caps.formats.iter().copied().find(|f| !f.is_srgb()).unwrap_or(caps.formats[0]);
         // see-through window: needs a compositor that takes premultiplied alpha from Vulkan/GL
         if std::env::var_os("LUMARIS_DEBUG_TIMING").is_some() {
-            eprintln!("lumaris: {:?} {:?}, alpha modes {:?}", gpu.adapter.get_info().backend, gpu.adapter.get_info().name, caps.alpha_modes);
+            eprintln!(
+                "lumaris: {:?} {:?}, alpha modes {:?}",
+                gpu.adapter.get_info().backend,
+                gpu.adapter.get_info().name,
+                caps.alpha_modes
+            );
         }
         let transparent = caps.alpha_modes.contains(&wgpu::CompositeAlphaMode::PreMultiplied);
         let alpha_mode = if transparent { wgpu::CompositeAlphaMode::PreMultiplied } else { caps.alpha_modes[0] };
@@ -183,13 +188,19 @@ impl Renderer {
                 sampler_entry(3),
             ],
         });
-        let mip_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("mip"),
-            entries: &[tex_entry(0), sampler_entry(1)],
-        });
+        let mip_layout = device
+            .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor { label: Some("mip"), entries: &[tex_entry(0), sampler_entry(1)] });
 
         let pipeline = make_pipeline(device, &layout, wgpu::include_wgsl!("shader.wgsl"), "vs_main", "fs_main", format, true);
-        let mip_pipeline = make_pipeline(device, &mip_layout, wgpu::include_wgsl!("mip.wgsl"), "vs_full", "fs_mip", wgpu::TextureFormat::Rgba8Unorm, false);
+        let mip_pipeline = make_pipeline(
+            device,
+            &mip_layout,
+            wgpu::include_wgsl!("mip.wgsl"),
+            "vs_full",
+            "fs_mip",
+            wgpu::TextureFormat::Rgba8Unorm,
+            false,
+        );
 
         let uniforms = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("uniforms"),
@@ -307,7 +318,12 @@ impl Renderer {
         }
         let size = wgpu::Extent3d { width: img.tex_w, height: img.tex_h, depth_or_array_layers: 1 };
         self.gpu.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &img.texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &img.texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             rgba,
             wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * img.tex_w), rows_per_image: Some(img.tex_h) },
             size,
@@ -361,7 +377,8 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(&self.nearest) },
             ],
         });
-        self.image = Some(ImageTexture { bind_group, view, texture, mips, tex_w: w, tex_h: h, width: logical.0, height: logical.1, vector });
+        self.image =
+            Some(ImageTexture { bind_group, view, texture, mips, tex_w: w, tex_h: h, width: logical.0, height: logical.1, vector });
     }
 
     /// Re-rendered vector image (same logical size, other pixel size).
@@ -380,9 +397,8 @@ impl Renderer {
         let device = &self.gpu.device;
         let mut encoder = device.create_command_encoder(&Default::default());
         for level in 1..mips {
-            let view = |l| {
-                texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() })
-            };
+            let view =
+                |l| texture.create_view(&wgpu::TextureViewDescriptor { base_mip_level: l, mip_level_count: Some(1), ..Default::default() });
             let (src, dst) = (view(level - 1), view(level));
             let bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: None,
@@ -426,7 +442,12 @@ impl Renderer {
                     view_formats: &[],
                 });
                 self.gpu.queue.write_texture(
-                    wgpu::TexelCopyTextureInfo { texture: &texture, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d::ZERO,
+                        aspect: wgpu::TextureAspect::All,
+                    },
                     pixels,
                     wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(4 * w), rows_per_image: Some(h) },
                     size,

@@ -1,0 +1,26 @@
+name: Build
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  arch:
+    name: Arch Linux
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: |
+          pacman -Syu --noconfirm --needed git rust pkgconf clang libheif libraw dav1d lcms2 \
+            wayland libxkbcommon fontconfig
+      - uses: actions/checkout@v5
+      - name: Build
+        run: cargo build --release --locked
+      - name: Lint
+        run: cargo clippy --release --locked --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --release --locked
+      - name: Formatting
+        run: cargo fmt --check

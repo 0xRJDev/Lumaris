@@ -92,10 +92,10 @@ pub fn show_in_folder(file: PathBuf) {
             )
             .ok()
         });
-        if shown.is_none() {
-            if let Some(dir) = file.parent() {
-                crate::apps::spawn_detached(Command::new("xdg-open").arg(dir));
-            }
+        if shown.is_none()
+            && let Some(dir) = file.parent()
+        {
+            crate::apps::spawn_detached(Command::new("xdg-open").arg(dir));
         }
     });
 }

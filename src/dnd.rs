@@ -5,12 +5,12 @@ use std::io::Read;
 use std::sync::{Arc, Mutex};
 
 use wayland_client::backend::Backend;
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_data_device::{self, WlDataDevice};
 use wayland_client::protocol::wl_data_device_manager::{DndAction, WlDataDeviceManager};
 use wayland_client::protocol::wl_data_offer::{self, WlDataOffer};
 use wayland_client::protocol::{wl_registry, wl_seat::WlSeat};
-use wayland_client::{event_created_child, Connection, Dispatch, Proxy, QueueHandle};
+use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, event_created_child};
 use winit::event_loop::EventLoopProxy;
 use winit::raw_window_handle::{HasDisplayHandle, RawDisplayHandle};
 use winit::window::Window;
@@ -19,22 +19,41 @@ use crate::UserEvent;
 
 const URI_LIST: &str = "text/uri-list";
 
+/// data offers and the types they provide
+type Offers = Arc<Mutex<Vec<(WlDataOffer, Vec<String>)>>>;
+
 struct State {
     proxy: EventLoopProxy<UserEvent>,
     conn: Connection,
     /// offers and the types they provide
-    offers: Arc<Mutex<Vec<(WlDataOffer, Vec<String>)>>>,
+    offers: Offers,
     current: Option<WlDataOffer>,
 }
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 impl Dispatch<WlSeat, ()> for State {
     fn event(_: &mut Self, _: &WlSeat, _: <WlSeat as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
 }
 impl Dispatch<WlDataDeviceManager, ()> for State {
-    fn event(_: &mut Self, _: &WlDataDeviceManager, _: <WlDataDeviceManager as Proxy>::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &WlDataDeviceManager,
+        _: <WlDataDeviceManager as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<WlDataOffer, ()> for State {
@@ -54,9 +73,9 @@ impl Dispatch<WlDataDevice, ()> for State {
     fn event(state: &mut Self, _: &WlDataDevice, event: wl_data_device::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
         match event {
             wl_data_device::Event::Enter { serial, id, .. } => {
-                let files = id.as_ref().is_some_and(|o| {
-                    state.offers.lock().unwrap().iter().any(|(x, types)| x == o && types.iter().any(|t| t == URI_LIST))
-                });
+                let files = id
+                    .as_ref()
+                    .is_some_and(|o| state.offers.lock().unwrap().iter().any(|(x, types)| x == o && types.iter().any(|t| t == URI_LIST)));
                 if let (Some(offer), true) = (id, files) {
                     offer.accept(serial, Some(URI_LIST.into()));
                     if offer.version() >= 3 {
@@ -96,12 +115,10 @@ impl Dispatch<WlDataDevice, ()> for State {
                     }
                 });
             }
-            wl_data_device::Event::Selection { id } => {
-                // clipboard offers are not used
-                if let Some(o) = id {
-                    state.offers.lock().unwrap().retain(|(x, _)| *x != o);
-                    o.destroy();
-                }
+            // clipboard offers are not used
+            wl_data_device::Event::Selection { id: Some(o) } => {
+                state.offers.lock().unwrap().retain(|(x, _)| *x != o);
+                o.destroy();
             }
             _ => {}
         }

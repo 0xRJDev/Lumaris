@@ -1,0 +1,42 @@
+# Maintainer: Lumaris contributors
+pkgname=lumaris-git
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Lean and fast image viewer for Linux"
+arch=('x86_64' 'aarch64')
+url="https://github.com/0xRJDev/Lumaris"
+license=('GPL-2.0-or-later')
+depends=('libheif' 'libraw' 'dav1d' 'lcms2' 'fontconfig' 'wayland' 'libxkbcommon' 'vulkan-icd-loader' 'libglvnd')
+makedepends=('git' 'rust' 'pkgconf' 'clang')
+optdepends=('wl-clipboard: copy images on Wayland'
+            'xdg-desktop-portal: open dialog'
+            'poppler: PDF files'
+            'xclip: copy images on X11'
+            'kdialog: open dialog without a portal')
+provides=('lumaris')
+conflicts=('lumaris')
+source=("git+$url.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd Lumaris
+  printf "%s.r%s.%s" "$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+build() {
+  cd Lumaris
+  cargo build --release --locked
+}
+
+check() {
+  cd Lumaris
+  cargo test --release --locked
+}
+
+package() {
+  cd Lumaris
+  install -Dm755 target/release/lumaris "$pkgdir/usr/bin/lumaris"
+  install -Dm644 packaging/lumaris.desktop "$pkgdir/usr/share/applications/lumaris.desktop"
+  install -Dm644 packaging/lumaris.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/lumaris-app.svg"
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

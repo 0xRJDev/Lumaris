@@ -28,7 +28,19 @@ pub struct View {
 
 impl View {
     pub fn new() -> View {
-        View { img: (1.0, 1.0), win: (1.0, 1.0), zoom: 1.0, target: 1.0, anchor: (0.0, 0.0), point: (0.0, 0.0), last_tick: None, fit_mode: true, enlarge: false, smooth: true, min_fit: 1.0 }
+        View {
+            img: (1.0, 1.0),
+            win: (1.0, 1.0),
+            zoom: 1.0,
+            target: 1.0,
+            anchor: (0.0, 0.0),
+            point: (0.0, 0.0),
+            last_tick: None,
+            fit_mode: true,
+            enlarge: false,
+            smooth: true,
+            min_fit: 1.0,
+        }
     }
 
     pub fn configure(&mut self, enlarge: bool, smooth: bool) {

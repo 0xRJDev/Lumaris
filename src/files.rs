@@ -3,17 +3,15 @@ use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 
 const EXTENSIONS: &[&str] = &[
-    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "bmp", "dib", "tif", "tiff", "qoi",
-    "ico", "tga", "pnm", "pbm", "pgm", "ppm", "pam", "svg", "svgz", "avif", "heic", "heif", "hif", "jxl",
-    "exr", "hdr", "dds", "ff", "psd", "psb", "kra", "ora", "jp2", "j2k", "j2c", "jpf", "jpx", "jpc", "xcf", "pdf",
+    "jpg", "jpeg", "jpe", "jfif", "png", "apng", "gif", "webp", "bmp", "dib", "tif", "tiff", "qoi", "ico", "tga", "pnm", "pbm", "pgm",
+    "ppm", "pam", "svg", "svgz", "avif", "heic", "heif", "hif", "jxl", "exr", "hdr", "dds", "ff", "psd", "psb", "kra", "ora", "jp2", "j2k",
+    "j2c", "jpf", "jpx", "jpc", "xcf", "pdf",
 ];
 
 pub fn is_supported(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .is_some_and(|e| {
-            EXTENSIONS.iter().chain(crate::decode::RAW_EXTENSIONS).any(|x| x.eq_ignore_ascii_case(e))
-        })
+        .is_some_and(|e| EXTENSIONS.iter().chain(crate::decode::RAW_EXTENSIONS).any(|x| x.eq_ignore_ascii_case(e)))
 }
 
 pub struct FileList {
@@ -41,10 +39,10 @@ impl FileList {
                     .collect()
             })
             .unwrap_or_default();
-        if let Some(s) = &start {
-            if !files.contains(s) {
-                files.push(s.clone()); // opened explicitly: show it even with an unknown extension
-            }
+        if let Some(s) = &start
+            && !files.contains(s)
+        {
+            files.push(s.clone()); // opened explicitly: show it even with an unknown extension
         }
         files.sort_by(|a, b| natural_cmp(&file_name(a), &file_name(b)));
         if files.is_empty() {
@@ -62,7 +60,10 @@ impl FileList {
                 let key = |p: &PathBuf| {
                     let m = std::fs::metadata(p).ok();
                     if order == 1 {
-                        m.and_then(|m| m.modified().ok()).and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map(|d| d.as_nanos()).unwrap_or(0)
+                        m.and_then(|m| m.modified().ok())
+                            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                            .map(|d| d.as_nanos())
+                            .unwrap_or(0)
                     } else {
                         m.map(|m| m.len() as u128).unwrap_or(0)
                     }
@@ -73,7 +74,8 @@ impl FileList {
             }
             3 => {
                 // shuffle (xorshift, seeded by the clock)
-                let mut x = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
+                let mut x =
+                    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1) | 1;
                 for i in (1..self.files.len()).rev() {
                     x ^= x << 13;
                     x ^= x >> 7;

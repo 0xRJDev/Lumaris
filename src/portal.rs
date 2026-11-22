@@ -14,12 +14,13 @@ pub fn uri_to_path(uri: &str) -> Option<PathBuf> {
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16) {
-                out.push(b);
-                i += 3;
-                continue;
-            }
+        if bytes[i] == b'%'
+            && i + 2 < bytes.len()
+            && let Ok(b) = u8::from_str_radix(std::str::from_utf8(&bytes[i + 1..i + 3]).unwrap_or(""), 16)
+        {
+            out.push(b);
+            i += 3;
+            continue;
         }
         out.push(bytes[i]);
         i += 1;
@@ -33,7 +34,8 @@ fn portal(folder: Option<&Path>) -> Option<Option<PathBuf>> {
     let token = format!("lumaris{}", std::process::id());
     let sender = conn.unique_name()?.trim_start_matches(':').replace('.', "_");
     let request = format!("/org/freedesktop/portal/desktop/request/{sender}/{token}");
-    let proxy = zbus::blocking::Proxy::new(&conn, "org.freedesktop.portal.Desktop", request.as_str(), "org.freedesktop.portal.Request").ok()?;
+    let proxy =
+        zbus::blocking::Proxy::new(&conn, "org.freedesktop.portal.Desktop", request.as_str(), "org.freedesktop.portal.Request").ok()?;
     let mut responses = proxy.receive_signal("Response").ok()?;
     let mut options: HashMap<&str, Value> = HashMap::new();
     options.insert("handle_token", Value::from(token.as_str()));
@@ -65,7 +67,11 @@ fn portal(folder: Option<&Path>) -> Option<Option<PathBuf>> {
 fn fallback(folder: Option<&Path>) -> Option<PathBuf> {
     let dir = folder.map(|f| f.to_string_lossy().into_owned()).unwrap_or_else(|| std::env::var("HOME").unwrap_or_default());
     let run = |c: &mut Command| {
-        c.output().ok().filter(|o| o.status.success()).map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).filter(|s| !s.is_empty())
+        c.output()
+            .ok()
+            .filter(|o| o.status.success())
+            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string())
+            .filter(|s| !s.is_empty())
     };
     run(Command::new("kdialog").args(["--title", "Open image", "--getopenfilename", &dir, "image/*"]))
         .or_else(|| run(Command::new("zenity").args(["--file-selection", "--title=Open image", &format!("--filename={dir}/")])))

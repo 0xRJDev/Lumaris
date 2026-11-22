@@ -253,7 +253,10 @@ impl KeyMap {
         self.bindings.iter().find_map(|(cmd, list)| {
             list.iter()
                 .any(|b| {
-                    b.key == name && b.ctrl == mods.control_key() && b.alt == mods.alt_key() && (!shift_counts || b.shift == mods.shift_key())
+                    b.key == name
+                        && b.ctrl == mods.control_key()
+                        && b.alt == mods.alt_key()
+                        && (!shift_counts || b.shift == mods.shift_key())
                 })
                 .then_some(*cmd)
         })
@@ -277,11 +280,7 @@ impl KeyMap {
 
     /// All keys of a command for the help
     pub fn shortcuts(&self, cmd: Command) -> String {
-        self.bindings
-            .iter()
-            .find(|(c, _)| *c == cmd)
-            .map(|(_, b)| b.iter().map(label).collect::<Vec<_>>().join(", "))
-            .unwrap_or_default()
+        self.bindings.iter().find(|(c, _)| *c == cmd).map(|(_, b)| b.iter().map(label).collect::<Vec<_>>().join(", ")).unwrap_or_default()
     }
 }
 

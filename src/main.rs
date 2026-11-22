@@ -265,7 +265,8 @@ impl App {
         }
         self.next_slide = self.slideshow.map(|d| Instant::now() + d);
         let play = settings::current().bool("PlayAnimations");
-        self.animation = (play && img.frames.len() > 1).then(|| Animation { due: Instant::now() + img.frames[0].delay, image: img.clone(), frame: 0 });
+        self.animation =
+            (play && img.frames.len() > 1).then(|| Animation { due: Instant::now() + img.frames[0].delay, image: img.clone(), frame: 0 });
         self.vector_request += 1;
         self.vector_scale = img.pixel_width as f64 / img.width as f64;
         self.current = Some(img);
@@ -385,10 +386,10 @@ impl App {
     }
 
     fn run_user_command(&mut self, i: usize) {
-        if self.current.is_some() {
-            if let Some(c) = self.user_commands.get(i) {
-                c.run(self.files.current());
-            }
+        if self.current.is_some()
+            && let Some(c) = self.user_commands.get(i)
+        {
+            c.run(self.files.current());
         }
     }
 
@@ -398,11 +399,8 @@ impl App {
             return;
         }
         let km = keys::current();
-        let mut lines: Vec<(String, String)> = keys::COMMANDS
-            .iter()
-            .map(|(cmd, _, desc, _)| (km.shortcuts(*cmd), desc.to_string()))
-            .filter(|(k, _)| !k.is_empty())
-            .collect();
+        let mut lines: Vec<(String, String)> =
+            keys::COMMANDS.iter().map(|(cmd, _, desc, _)| (km.shortcuts(*cmd), desc.to_string())).filter(|(k, _)| !k.is_empty()).collect();
         for (k, d) in [
             ("1 … 9", "Slideshow, seconds per image (Ctrl: tenths)"),
             ("Mouse wheel", "Zoom (Ctrl: next / previous image)"),
@@ -530,10 +528,10 @@ impl App {
 
     fn close_settings(&mut self) {
         if self.settings_panel.take().is_some() {
-            if let Some(size) = self.size_before_settings.take() {
-                if self.windowed().is_some() {
-                    self.apply_window_size(size);
-                }
+            if let Some(size) = self.size_before_settings.take()
+                && self.windowed().is_some()
+            {
+                self.apply_window_size(size);
             }
             self.sync_overlays();
         }
@@ -647,11 +645,7 @@ impl App {
     fn neighbour(&self, delta: isize) -> Option<usize> {
         let n = self.files.files.len() as isize;
         let k = self.files.index as isize + delta;
-        if self.loop_folder {
-            Some(k.rem_euclid(n) as usize)
-        } else {
-            (0..n).contains(&k).then_some(k as usize)
-        }
+        if self.loop_folder { Some(k.rem_euclid(n) as usize) } else { (0..n).contains(&k).then_some(k as usize) }
     }
 
     fn step(&mut self, event_loop: &ActiveEventLoop, delta: isize) {
@@ -709,14 +703,17 @@ impl App {
                 self.blur = None;
             }
         }
-        let changed = |k: &str| old.is_none_or(|o| {
-            let i = settings::DEFS.iter().position(|d| d.key == k).unwrap();
-            o.get(i) != s.get(i)
-        });
-        if changed("KeepAbove") && (old.is_some() || s.bool("KeepAbove")) {
-            if let Some(k) = &self.kwin {
-                k.set_keep_above(s.bool("KeepAbove"));
-            }
+        let changed = |k: &str| {
+            old.is_none_or(|o| {
+                let i = settings::DEFS.iter().position(|d| d.key == k).unwrap();
+                o.get(i) != s.get(i)
+            })
+        };
+        if changed("KeepAbove")
+            && (old.is_some() || s.bool("KeepAbove"))
+            && let Some(k) = &self.kwin
+        {
+            k.set_keep_above(s.bool("KeepAbove"));
         }
         if old.is_some() && (changed("SortOrder") || changed("SortReverse")) {
             self.files.sort(s.choice("SortOrder"), s.bool("SortReverse"));
@@ -754,14 +751,26 @@ impl App {
         let have_image = self.current.is_some();
         let file = self.files.current().to_path_buf();
         self.menu_apps = if have_image { apps::for_file(&file) } else { Vec::new() };
-        let open_with = Item::sub("Open image with", self.menu_apps.iter().enumerate().map(|(i, a)| Item::new(&a.name, "", Action::OpenWith(i))).collect());
+        let open_with = Item::sub(
+            "Open image with",
+            self.menu_apps.iter().enumerate().map(|(i, a)| Item::new(&a.name, "", Action::OpenWith(i))).collect(),
+        );
         let current = self.slideshow.map(|d| d.as_millis() as u64).unwrap_or(0);
         let default_s = settings::current().number("SlideshowInterval");
         let start_label = format!("Start ({default_s} s per image)");
         let mut slideshow: Vec<Item> = vec![Item::new(&start_label, "", Action::SlideshowStart), Item::separator()];
-        slideshow.extend([(0, "Off", "Esc"), (1000, "1 second", "1"), (2000, "2 seconds", "2"), (3000, "3 seconds", "3"), (5000, "5 seconds", "5"), (10000, "10 seconds", "")]
+        slideshow.extend(
+            [
+                (0, "Off", "Esc"),
+                (1000, "1 second", "1"),
+                (2000, "2 seconds", "2"),
+                (3000, "3 seconds", "3"),
+                (5000, "5 seconds", "5"),
+                (10000, "10 seconds", ""),
+            ]
             .into_iter()
-            .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms)));
+            .map(|(ms, label, key)| Item::check(label, key, Action::Slideshow(ms), current == ms)),
+        );
         let km = keys::current();
         let zoom = vec![
             Item::new("Fit to window", &km.shortcut(keys::Command::Fit), Action::Fit),
@@ -815,20 +824,20 @@ impl App {
         // menus on popup surfaces may use the whole screen area around the window
         let scale = window.scale_factor();
         let s = window.inner_size();
-        if let (Some(_), Some(f)) = (self.popups.as_ref(), self.kwin.as_ref().and_then(|k| k.frame())) {
-            if window.fullscreen().is_none() {
-                // a few pixels inside the screen edges (KWin centres layer surfaces that touch them)
-                let e = 4.0;
-                let b = (
-                    ((-f.client.0 as f64 + e) * scale) as f32,
-                    ((-f.client.1 as f64 + e) * scale) as f32,
-                    (((f.area.0 - f.client.0) as f64 - e) * scale) as f32,
-                    (((f.area.1 - f.client.1) as f64 - e) * scale) as f32,
-                );
-                self.menu = Some(menu::Menu::open_in(items, at, (s.width, s.height), b, scale));
-                self.sync_overlays();
-                return;
-            }
+        if let (Some(_), Some(f)) = (self.popups.as_ref(), self.kwin.as_ref().and_then(|k| k.frame()))
+            && window.fullscreen().is_none()
+        {
+            // a few pixels inside the screen edges (KWin centres layer surfaces that touch them)
+            let e = 4.0;
+            let b = (
+                ((-f.client.0 as f64 + e) * scale) as f32,
+                ((-f.client.1 as f64 + e) * scale) as f32,
+                (((f.area.0 - f.client.0) as f64 - e) * scale) as f32,
+                (((f.area.1 - f.client.1) as f64 - e) * scale) as f32,
+            );
+            self.menu = Some(menu::Menu::open_in(items, at, (s.width, s.height), b, scale));
+            self.sync_overlays();
+            return;
         }
         // otherwise a window too small for the menu grows while the menu is open
         let mut at = at;
@@ -850,10 +859,10 @@ impl App {
 
     fn close_menu(&mut self) {
         if self.menu.take().is_some() {
-            if let Some(size) = self.size_before_menu.take() {
-                if self.windowed().is_some() {
-                    self.apply_window_size(size);
-                }
+            if let Some(size) = self.size_before_menu.take()
+                && self.windowed().is_some()
+            {
+                self.apply_window_size(size);
             }
             self.sync_overlays();
         }
@@ -883,10 +892,11 @@ impl App {
         let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
         self.nav.configure(size, scale);
         self.nav.set_view(self.view.image_rect());
-        if self.navigation_panel && self.nav.wants_image() {
-            if let Some(img) = self.current.clone() {
-                self.nav.set_image(&img.rgba, img.pixel_width, img.pixel_height, self.orient);
-            }
+        if self.navigation_panel
+            && self.nav.wants_image()
+            && let Some(img) = self.current.clone()
+        {
+            self.nav.set_image(&img.rgba, img.pixel_width, img.pixel_height, self.orient);
         }
         let show_nav = self.navigation_panel && self.settings_panel.is_none();
         let App { renderer, menu, settings_panel, info, help, nav, toast, .. } = self;
@@ -1052,7 +1062,14 @@ impl App {
         };
         let (ctrl, shift) = (self.mods.control_key(), self.mods.shift_key());
         if digit > 0 && (!shift || ctrl) && !self.mods.alt_key() {
-            let ms = digit * if ctrl && shift { 10 } else if ctrl { 100 } else { 1000 };
+            let ms = digit
+                * if ctrl && shift {
+                    10
+                } else if ctrl {
+                    100
+                } else {
+                    1000
+                };
             self.start_slideshow(Duration::from_millis(ms));
             return;
         }
@@ -1094,27 +1111,28 @@ impl App {
             }
             ["rclick", x, y] | ["lclick", x, y] | ["move", x, y] => {
                 let (Ok(x), Ok(y)) = (x.parse::<f64>(), y.parse::<f64>()) else { return };
-                self.window_event(event_loop, self.window.as_ref().unwrap().id(), WindowEvent::CursorMoved {
-                    device_id: winit::event::DeviceId::dummy(),
-                    position: PhysicalPosition::new(x, y),
-                });
+                self.window_event(
+                    event_loop,
+                    self.window.as_ref().unwrap().id(),
+                    WindowEvent::CursorMoved { device_id: winit::event::DeviceId::dummy(), position: PhysicalPosition::new(x, y) },
+                );
                 if a[0] != "move" {
                     let button = if a[0] == "rclick" { MouseButton::Right } else { MouseButton::Left };
                     for state in [ElementState::Pressed, ElementState::Released] {
-                        self.window_event(event_loop, self.window.as_ref().unwrap().id(), WindowEvent::MouseInput {
-                            device_id: winit::event::DeviceId::dummy(),
-                            state,
-                            button,
-                        });
+                        self.window_event(
+                            event_loop,
+                            self.window.as_ref().unwrap().id(),
+                            WindowEvent::MouseInput { device_id: winit::event::DeviceId::dummy(), state, button },
+                        );
                     }
                 }
             }
             ["settings"] => self.open_settings(),
             ["settingswheel", steps] => {
-                if let (Some(p), Ok(n)) = (self.settings_panel.as_mut(), steps.parse::<f64>()) {
-                    if p.wheel(n) {
-                        self.sync_overlays();
-                    }
+                if let (Some(p), Ok(n)) = (self.settings_panel.as_mut(), steps.parse::<f64>())
+                    && p.wheel(n)
+                {
+                    self.sync_overlays();
                 }
             }
             ["menuinfo"] => {
@@ -1134,7 +1152,24 @@ impl App {
             ["info"] => {
                 let s = self.window.as_ref().map(|w| w.inner_size()).unwrap_or_default();
                 let r = self.view.image_rect();
-                println!("INFO orient={} files={} menu={} index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}", self.orient, self.files.files.len(), self.menu.is_some(), self.files.index, self.renderer.as_ref().and_then(|r| r.texture_size()), self.animation.as_ref().map(|a| a.frame), self.slideshow, self.view.zoom, s.width, s.height, r[0], r[1], r[2], r[3], self.kwin.as_ref().and_then(|k| k.frame()));
+                println!(
+                    "INFO orient={} files={} menu={} index={} tex={:?} anim={:?} slideshow={:?} zoom={:.4} window={}x{} image_rect={:.1},{:.1},{:.1},{:.1} frame={:?}",
+                    self.orient,
+                    self.files.files.len(),
+                    self.menu.is_some(),
+                    self.files.index,
+                    self.renderer.as_ref().and_then(|r| r.texture_size()),
+                    self.animation.as_ref().map(|a| a.frame),
+                    self.slideshow,
+                    self.view.zoom,
+                    s.width,
+                    s.height,
+                    r[0],
+                    r[1],
+                    r[2],
+                    r[3],
+                    self.kwin.as_ref().and_then(|k| k.frame())
+                );
             }
             ["quit"] => event_loop.exit(),
             _ => eprintln!("lumaris: unknown test command: {cmd}"),
@@ -1144,24 +1179,27 @@ impl App {
 
 impl ApplicationHandler<UserEvent> for App {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        if let Some(due) = self.next_slide {
-            if Instant::now() >= due {
-                self.next_slide = None;
-                let before = self.files.index;
-                let at_end = before + 1 == self.files.files.len() && settings::current().bool("SlideshowStopAtEnd");
-                if !at_end {
-                    self.step(event_loop, 1);
-                }
-                if self.files.index == before {
-                    self.stop_slideshow(); // last image and no looping (or a single image)
-                }
+        if let Some(due) = self.next_slide
+            && Instant::now() >= due
+        {
+            self.next_slide = None;
+            let before = self.files.index;
+            let at_end = before + 1 == self.files.files.len() && settings::current().bool("SlideshowStopAtEnd");
+            if !at_end {
+                self.step(event_loop, 1);
+            }
+            if self.files.index == before {
+                self.stop_slideshow(); // last image and no looping (or a single image)
             }
         }
         self.next_animation_frame();
         if self.nav.expire() | self.toast.expire() {
             self.sync_overlays();
         }
-        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due), self.nav.deadline(), self.toast.deadline()].into_iter().flatten().min();
+        let next = [self.next_slide, self.animation.as_ref().map(|a| a.due), self.nav.deadline(), self.toast.deadline()]
+            .into_iter()
+            .flatten()
+            .min();
         match next {
             Some(due) => event_loop.set_control_flow(ControlFlow::WaitUntil(due)),
             None => event_loop.set_control_flow(ControlFlow::Wait),
@@ -1180,10 +1218,8 @@ impl ApplicationHandler<UserEvent> for App {
         };
         let suffix = if first.is_err() { " (cannot open)" } else { "" };
         // transparent: the window background can show the (blurred) desktop
-        let mut attrs = Window::default_attributes()
-            .with_title(Self::title_for(&path, suffix))
-            .with_inner_size(size)
-            .with_transparent(true);
+        let mut attrs =
+            Window::default_attributes().with_title(Self::title_for(&path, suffix)).with_inner_size(size).with_transparent(true);
         #[cfg(target_os = "linux")]
         {
             use winit::platform::wayland::WindowAttributesExtWayland;
@@ -1565,7 +1601,9 @@ fn main() {
     // decode the first image while the GPU starts up
     let first_path = files.current().to_path_buf();
     let first = std::thread::spawn(move || {
-        std::panic::catch_unwind(|| decode::decode(&first_path)).unwrap_or_else(|_| Err("the file could not be decoded".into())).map(Arc::new)
+        std::panic::catch_unwind(|| decode::decode(&first_path))
+            .unwrap_or_else(|_| Err("the file could not be decoded".into()))
+            .map(Arc::new)
     });
     let gpu = match pollster::block_on(gpu::Gpu::new()) {
         Ok(g) => g,

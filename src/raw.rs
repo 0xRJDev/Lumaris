@@ -1,7 +1,7 @@
 // Camera RAW files through LibRaw (system library, thread-safe variant libraw_r).
 // Shows the camera's embedded preview (fast, looks like the camera's own JPEG); files without
 // one are developed with LibRaw's default settings.
-use std::ffi::{c_char, c_int, c_uint, c_ushort, c_void, CString};
+use std::ffi::{CString, c_char, c_int, c_uint, c_ushort, c_void};
 use std::path::Path;
 
 use image::DynamicImage;
@@ -89,10 +89,10 @@ pub fn decode(path: &Path, develop: bool) -> Result<DynamicImage, String> {
         let p = unsafe { libraw_dcraw_make_mem_thumb(lr.0, &mut err) };
         if !p.is_null() {
             let img = Image(p);
-            if let Some(d) = img.to_dynamic() {
-                if d.width() >= 640 {
-                    return Ok(d);
-                }
+            if let Some(d) = img.to_dynamic()
+                && d.width() >= 640
+            {
+                return Ok(d);
             }
         }
     }

@@ -4,7 +4,7 @@
 // and falls back to KDE's older org_kde_kwin_blur protocol. Without either the window is only
 // see-through.
 use wayland_client::backend::{Backend, ObjectId};
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::{wl_compositor::WlCompositor, wl_region::WlRegion, wl_registry, wl_surface::WlSurface};
 use wayland_client::{Connection, Dispatch, EventQueue, Proxy, QueueHandle};
 use wayland_protocols::ext::background_effect::v1::client::ext_background_effect_manager_v1::ExtBackgroundEffectManagerV1;
@@ -26,7 +26,15 @@ macro_rules! ignore_events {
 ignore_events!(WlCompositor, WlRegion, ExtBackgroundEffectManagerV1, ExtBackgroundEffectSurfaceV1, OrgKdeKwinBlurManager, OrgKdeKwinBlur);
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 enum Effect {

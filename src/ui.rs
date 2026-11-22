@@ -97,6 +97,7 @@ pub fn text_width(font: &fontdue::Font, text: &str, px: f32) -> f32 {
 }
 
 /// Blends text into the premultiplied pixmap at baseline y.
+#[allow(clippy::too_many_arguments)] // position, size, colour and opacity belong together here
 pub fn draw_text(pm: &mut Pixmap, font: &fontdue::Font, text: &str, px: f32, mut x: f32, baseline: f32, rgb: [u8; 3], alpha: f32) {
     let (w, h) = (pm.width() as i32, pm.height() as i32);
     let data = pm.data_mut();
@@ -143,4 +144,3 @@ pub fn rounded_rect(x: f32, y: f32, w: f32, h: f32, r: f32) -> Option<resvg::tin
     pb.close();
     pb.finish()
 }
-

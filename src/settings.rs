@@ -51,53 +51,143 @@ macro_rules! def {
 }
 
 pub const DEFS: &[Def] = &[
-    def!("Window", "MaxWindowSize", "Opening size (part of the screen)", Number { min: 30.0, max: 100.0, step: 5.0, unit: "%" }, N(80.0),
-        "Largest part of the screen a new window may take; the image is fitted into it"),
-    def!("Window", "MinWindowSize", "Smallest opening size", Number { min: 0.0, max: 50.0, step: 5.0, unit: "%" }, N(10.0),
-        "Small images open enlarged to at least this part of the screen height (zooming out still works)"),
-    def!("Window", "MaxWindowAspect", "Widest window shape", Choice(ASPECTS), C(2),
-        "Widest window aspect ratio, unless the image itself is wider"),
-    def!("Window", "WindowFollowsZoom", "Window follows the zoom", Bool, B(true),
-        "While zooming the window grows and shrinks with the image, up to the screen size"),
+    def!(
+        "Window",
+        "MaxWindowSize",
+        "Opening size (part of the screen)",
+        Number { min: 30.0, max: 100.0, step: 5.0, unit: "%" },
+        N(80.0),
+        "Largest part of the screen a new window may take; the image is fitted into it"
+    ),
+    def!(
+        "Window",
+        "MinWindowSize",
+        "Smallest opening size",
+        Number { min: 0.0, max: 50.0, step: 5.0, unit: "%" },
+        N(10.0),
+        "Small images open enlarged to at least this part of the screen height (zooming out still works)"
+    ),
+    def!(
+        "Window",
+        "MaxWindowAspect",
+        "Widest window shape",
+        Choice(ASPECTS),
+        C(2),
+        "Widest window aspect ratio, unless the image itself is wider"
+    ),
+    def!(
+        "Window",
+        "WindowFollowsZoom",
+        "Window follows the zoom",
+        Bool,
+        B(true),
+        "While zooming the window grows and shrinks with the image, up to the screen size"
+    ),
     def!("Window", "StartFullScreen", "Open in full screen", Bool, B(false), "Start in full screen mode"),
     def!("Window", "KeepAbove", "Keep window above others", Bool, B(false), "Keep the window above other windows (KWin)"),
-    def!("Window", "NavigationPanel", "Navigation panel", Bool, B(true),
-        "Buttons and a zoom map at the bottom of the window, shown while the mouse moves"),
-    def!("Window", "SingleInstance", "Single window", Bool, B(false),
-        "Images opened while Lumaris runs are shown in the running window", restart),
-    def!("Background", "BackgroundMode", "Background", Choice(BACKGROUNDS), C(0),
-        "What is behind the image and transparent image parts"),
-    def!("Background", "BackgroundOpacity", "Background opacity", Number { min: 0.0, max: 100.0, step: 10.0, unit: "%" }, N(0.0),
-        "With the desktop backgrounds: how much the background colour covers the desktop"),
+    def!(
+        "Window",
+        "NavigationPanel",
+        "Navigation panel",
+        Bool,
+        B(true),
+        "Buttons and a zoom map at the bottom of the window, shown while the mouse moves"
+    ),
+    def!(
+        "Window",
+        "SingleInstance",
+        "Single window",
+        Bool,
+        B(false),
+        "Images opened while Lumaris runs are shown in the running window",
+        restart
+    ),
+    def!("Background", "BackgroundMode", "Background", Choice(BACKGROUNDS), C(0), "What is behind the image and transparent image parts"),
+    def!(
+        "Background",
+        "BackgroundOpacity",
+        "Background opacity",
+        Number { min: 0.0, max: 100.0, step: 10.0, unit: "%" },
+        N(0.0),
+        "With the desktop backgrounds: how much the background colour covers the desktop"
+    ),
     def!("Background", "BackgroundColour", "Background colour", Choice(COLOURS), C(0), "Colour around the image"),
     def!("Zoom", "FitMode", "Fit to window", Choice(FIT_MODES), C(0), "Whether small images are enlarged to fill the window"),
     def!("Zoom", "SmoothZoom", "Smooth zoom animation", Bool, B(true), "Glide to the new zoom instead of jumping"),
     def!("Zoom", "WheelAction", "Mouse wheel", Choice(WHEEL), C(0), "What the mouse wheel does (Ctrl+wheel does the other)"),
-    def!("Zoom", "ZoomStep", "Zoom step per wheel notch", Number { min: 5.0, max: 50.0, step: 5.0, unit: "%" }, N(20.0),
-        "How much one wheel notch or +/- zooms"),
-    def!("Zoom", "PixelArt", "Sharp pixels for pixel art", Bool, B(true),
-        "Enlarge small images with square pixels instead of smoothing them"),
-    def!("Zoom", "PixelArtMaxSize", "Pixel art: largest image size", Number { min: 32.0, max: 1024.0, step: 32.0, unit: "px" }, N(256.0),
-        "Images up to this width and height count as pixel art"),
+    def!(
+        "Zoom",
+        "ZoomStep",
+        "Zoom step per wheel notch",
+        Number { min: 5.0, max: 50.0, step: 5.0, unit: "%" },
+        N(20.0),
+        "How much one wheel notch or +/- zooms"
+    ),
+    def!(
+        "Zoom",
+        "PixelArt",
+        "Sharp pixels for pixel art",
+        Bool,
+        B(true),
+        "Enlarge small images with square pixels instead of smoothing them"
+    ),
+    def!(
+        "Zoom",
+        "PixelArtMaxSize",
+        "Pixel art: largest image size",
+        Number { min: 32.0, max: 1024.0, step: 32.0, unit: "px" },
+        N(256.0),
+        "Images up to this width and height count as pixel art"
+    ),
     def!("Navigation", "LoopFolder", "Loop through folder", Bool, B(true), "After the last image comes the first one"),
     def!("Navigation", "SortOrder", "Sort order", Choice(SORT), C(0), "Order of the images of a folder"),
     def!("Navigation", "SortReverse", "Reverse sort order", Bool, B(false), "Sort in reverse order"),
-    def!("Navigation", "KeepZoom", "Keep zoom on next image", Bool, B(false),
-        "Keep the zoom when going to another image instead of fitting it"),
-    def!("Slideshow", "SlideshowInterval", "Default interval", Number { min: 1.0, max: 60.0, step: 1.0, unit: "s" }, N(3.0),
-        "Seconds per image when the slideshow is started from the menu"),
+    def!(
+        "Navigation",
+        "KeepZoom",
+        "Keep zoom on next image",
+        Bool,
+        B(false),
+        "Keep the zoom when going to another image instead of fitting it"
+    ),
+    def!(
+        "Slideshow",
+        "SlideshowInterval",
+        "Default interval",
+        Number { min: 1.0, max: 60.0, step: 1.0, unit: "s" },
+        N(3.0),
+        "Seconds per image when the slideshow is started from the menu"
+    ),
     def!("Slideshow", "SlideshowStopAtEnd", "Stop at the last image", Bool, B(false), "Stop instead of starting over"),
     def!("Slideshow", "SlideshowFullScreen", "Start in full screen", Bool, B(false), "Switch to full screen when a slideshow starts"),
     def!("Slideshow", "Transition", "Transition", Choice(TRANSITIONS), C(1), "How the slideshow changes images"),
     def!("Formats", "PlayAnimations", "Play animations", Bool, B(true), "Play animated GIF, WebP and PNG files"),
-    def!("Formats", "RawMode", "Camera RAW files", Choice(RAW), C(0),
-        "Show the camera's embedded preview, or develop the RAW data (slow)"),
-    def!("Formats", "ColourProfiles", "Use embedded colour profiles", Bool, B(true),
-        "Convert images with an embedded colour profile (ICC) to sRGB"),
-    def!("Advanced", "PreferDedicatedGpu", "Prefer the dedicated GPU", Bool, B(true),
-        "Use the more powerful GPU when there are several", restart),
-    def!("Advanced", "Prefetch", "Images decoded in advance", Number { min: 0.0, max: 3.0, step: 1.0, unit: "" }, N(1.0),
-        "How many images before and after the current one are decoded in advance"),
+    def!("Formats", "RawMode", "Camera RAW files", Choice(RAW), C(0), "Show the camera's embedded preview, or develop the RAW data (slow)"),
+    def!(
+        "Formats",
+        "ColourProfiles",
+        "Use embedded colour profiles",
+        Bool,
+        B(true),
+        "Convert images with an embedded colour profile (ICC) to sRGB"
+    ),
+    def!(
+        "Advanced",
+        "PreferDedicatedGpu",
+        "Prefer the dedicated GPU",
+        Bool,
+        B(true),
+        "Use the more powerful GPU when there are several",
+        restart
+    ),
+    def!(
+        "Advanced",
+        "Prefetch",
+        "Images decoded in advance",
+        Number { min: 0.0, max: 3.0, step: 1.0, unit: "" },
+        N(1.0),
+        "How many images before and after the current one are decoded in advance"
+    ),
 ];
 
 #[derive(Clone)]
@@ -159,9 +249,12 @@ impl Settings {
                     _ => None,
                 },
                 Kind::Choice(options) => options.iter().position(|o| o.eq_ignore_ascii_case(v)).map(Value::Choice),
-                Kind::Number { min, max, .. } => {
-                    v.trim_end_matches(|c: char| c.is_alphabetic() || c == '%').trim().parse::<f64>().ok().map(|n| Value::Number(n.clamp(*min, *max)))
-                }
+                Kind::Number { min, max, .. } => v
+                    .trim_end_matches(|c: char| c.is_alphabetic() || c == '%')
+                    .trim()
+                    .parse::<f64>()
+                    .ok()
+                    .map(|n| Value::Number(n.clamp(*min, *max))),
             };
             if let Some(value) = value {
                 s.values[i] = value;
@@ -180,7 +273,9 @@ impl Settings {
             for (i, d) in DEFS.iter().enumerate().filter(|(_, d)| d.section == *section) {
                 let options = match &d.kind {
                     Kind::Choice(o) => format!(" ({})", o.join(" | ")),
-                    Kind::Number { min, max, unit, .. } => format!(" ({min}..{max}{})", if unit.is_empty() { String::new() } else { format!(" {unit}") }),
+                    Kind::Number { min, max, unit, .. } => {
+                        format!(" ({min}..{max}{})", if unit.is_empty() { String::new() } else { format!(" {unit}") })
+                    }
                     Kind::Bool => " (true | false)".into(),
                 };
                 let value = match (self.values[i], &d.kind) {
@@ -189,7 +284,14 @@ impl Settings {
                     (Value::Number(n), _) => format!("{n}"),
                     _ => String::new(),
                 };
-                out.push_str(&format!("# {}{}{}\n{}={}\n", d.help, options, if d.restart { " - after a restart" } else { "" }, d.key, value));
+                out.push_str(&format!(
+                    "# {}{}{}\n{}={}\n",
+                    d.help,
+                    options,
+                    if d.restart { " - after a restart" } else { "" },
+                    d.key,
+                    value
+                ));
             }
         }
         let path = Self::path();

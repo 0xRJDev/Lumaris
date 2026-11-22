@@ -102,7 +102,8 @@ fn load() -> Database {
         }
         files.push(d.join("mimeapps.list"));
     }
-    let (mut defaults, mut added, mut removed) = (HashMap::new(), HashMap::<String, Vec<String>>::new(), HashMap::<String, HashSet<String>>::new());
+    let (mut defaults, mut added, mut removed) =
+        (HashMap::new(), HashMap::<String, Vec<String>>::new(), HashMap::<String, HashSet<String>>::new());
     for f in files {
         let Ok(text) = std::fs::read_to_string(&f) else { continue };
         let ini = parse_ini(&text);
@@ -198,7 +199,7 @@ pub fn for_file(path: &Path) -> Vec<DesktopApp> {
     for id in db.added.get(&mime).into_iter().flatten() {
         push(id, &mut ids);
     }
-    let mut rest: Vec<&DesktopApp> = db.apps.values().filter(|a| a.mime_types.iter().any(|m| *m == mime)).collect();
+    let mut rest: Vec<&DesktopApp> = db.apps.values().filter(|a| a.mime_types.contains(&mime)).collect();
     rest.sort_by(|a, b| b.preference.cmp(&a.preference).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
     for a in rest {
         push(&a.id, &mut ids);

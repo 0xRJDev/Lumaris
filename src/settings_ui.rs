@@ -3,7 +3,7 @@
 use resvg::tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
 use crate::menu::{self, Action, Item, Menu};
-use crate::settings::{Def, Kind, Settings, Value, DEFS, SECTIONS};
+use crate::settings::{DEFS, Def, Kind, SECTIONS, Settings, Value};
 use crate::ui::{color, draw_text, rounded_rect, style, text_width};
 
 #[derive(Clone, Copy, PartialEq)]
@@ -138,7 +138,8 @@ impl SettingsPanel {
                 if let (Kind::Choice(options), Value::Choice(cur)) = (&DEFS[i].kind, self.values.get(i)) {
                     let items = options.iter().enumerate().map(|(k, o)| Item::check(o, "", Action::Choice(k), k == cur)).collect();
                     let (_, hx, hy, _, hh) = *self.hits.iter().find(|h| h.0 == Hit::Choice(i)).unwrap();
-                    let m = Menu::open(items, (hx as f64, (hy + hh) as f64), (self.window.0 as u32, self.window.1 as u32), self.scale as f64);
+                    let m =
+                        Menu::open(items, (hx as f64, (hy + hh) as f64), (self.window.0 as u32, self.window.1 as u32), self.scale as f64);
                     self.choice = Some((i, m));
                 }
                 Outcome::Redraw
@@ -239,7 +240,13 @@ impl SettingsPanel {
         for (k, link) in ["Edit settings file…", "Edit key bindings…", "Edit user commands…"].iter().enumerate() {
             let link_top = h - self.u(32.0) * (3 - k) as f32 - self.u(12.0);
             draw_text(&mut pm, font, link, small, self.u(20.0), baseline_in(link_top, self.u(32.0), small), st.selection, 1.0);
-            hits.push((Hit::EditFile(k as u8), rx + self.u(12.0), ry + link_top, text_width(font, link, small) + self.u(16.0), self.u(32.0)));
+            hits.push((
+                Hit::EditFile(k as u8),
+                rx + self.u(12.0),
+                ry + link_top,
+                text_width(font, link, small) + self.u(16.0),
+                self.u(32.0),
+            ));
         }
 
         // close button

@@ -6,11 +6,16 @@
 use std::os::fd::AsFd;
 use std::sync::{Arc, Mutex};
 
-use wayland_client::globals::{registry_queue_init, GlobalListContents};
+use wayland_client::globals::{GlobalListContents, registry_queue_init};
 use wayland_client::protocol::wl_pointer::{self, ButtonState, WlPointer};
 use wayland_client::protocol::{
-    wl_buffer::WlBuffer, wl_compositor::WlCompositor, wl_registry, wl_seat::WlSeat, wl_shm::{self, WlShm},
-    wl_shm_pool::WlShmPool, wl_surface::WlSurface,
+    wl_buffer::WlBuffer,
+    wl_compositor::WlCompositor,
+    wl_registry,
+    wl_seat::WlSeat,
+    wl_shm::{self, WlShm},
+    wl_shm_pool::WlShmPool,
+    wl_surface::WlSurface,
 };
 use wayland_client::{Connection, Dispatch, Proxy, QueueHandle, WEnum};
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_shell_v1::{Layer as ShellLayer, ZwlrLayerShellV1};
@@ -77,11 +82,26 @@ macro_rules! ignore_events {
 ignore_events!(WlCompositor, WlSurface, WlShm, WlShmPool, WlBuffer, WlSeat, ZwlrLayerShellV1);
 
 impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for State {
-    fn event(_: &mut Self, _: &wl_registry::WlRegistry, _: wl_registry::Event, _: &GlobalListContents, _: &Connection, _: &QueueHandle<Self>) {}
+    fn event(
+        _: &mut Self,
+        _: &wl_registry::WlRegistry,
+        _: wl_registry::Event,
+        _: &GlobalListContents,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
 }
 
 impl Dispatch<ZwlrLayerSurfaceV1, ()> for State {
-    fn event(state: &mut Self, layer: &ZwlrLayerSurfaceV1, event: zwlr_layer_surface_v1::Event, _: &(), _: &Connection, _: &QueueHandle<Self>) {
+    fn event(
+        state: &mut Self,
+        layer: &ZwlrLayerSurfaceV1,
+        event: zwlr_layer_surface_v1::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
         if std::env::var_os("LUMARIS_DEBUG_POPUP").is_some() {
             eprintln!("popup layer: {event:?}");
         }
@@ -124,11 +144,12 @@ impl Dispatch<WlPointer, ()> for State {
                     let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Motion(x, y)));
                 }
             }
-            wl_pointer::Event::Button { button, state: WEnum::Value(ButtonState::Pressed), .. } if state.over.is_some() => {
+            wl_pointer::Event::Button { button, state: WEnum::Value(ButtonState::Pressed), .. }
+                if state.over.is_some()
                 // BTN_LEFT = 0x110, BTN_RIGHT = 0x111
-                if button == 0x110 || button == 0x111 {
-                    let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Press(button == 0x110)));
-                }
+                && (button == 0x110 || button == 0x111) =>
+            {
+                let _ = state.proxy.send_event(UserEvent::Popup(PopupInput::Press(button == 0x110)));
             }
             _ => {}
         }
@@ -283,7 +304,7 @@ impl Popups {
         file.set_len(size as u64).ok()?;
         // ARGB8888 is B, G, R, A in memory (little endian); the pixels are premultiplied RGBA
         let mut bgra = Vec::with_capacity(size);
-        for p in pixels.chunks_exact(4) {
+        for p in pixels.as_chunks::<4>().0 {
             bgra.extend_from_slice(&[p[2], p[1], p[0], p[3]]);
         }
         use std::os::unix::fs::FileExt;

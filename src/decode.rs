@@ -1,7 +1,7 @@
 // Image decoding on worker threads.
 use std::io::BufReader;
 use std::path::{Path, PathBuf};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -49,16 +49,16 @@ fn extension(path: &Path) -> String {
 }
 
 pub const RAW_EXTENSIONS: &[&str] = &[
-    "3fr", "ari", "arw", "bay", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "k25", "kdc", "mef", "mos", "mrw",
-    "nef", "nrw", "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
+    "3fr", "ari", "arw", "bay", "cr2", "cr3", "crw", "dcr", "dng", "erf", "fff", "iiq", "k25", "kdc", "mef", "mos", "mrw", "nef", "nrw",
+    "orf", "pef", "raf", "raw", "rw2", "rwl", "sr2", "srf", "srw", "x3f",
 ];
 
 pub fn decode(path: &Path) -> Result<Decoded, String> {
     // a page of a comic archive
-    if !path.exists() {
-        if let Some(bytes) = crate::archive::read(path) {
-            return decode_bytes(&bytes?);
-        }
+    if !path.exists()
+        && let Some(bytes) = crate::archive::read(path)
+    {
+        return decode_bytes(&bytes?);
     }
     match extension(path).as_str() {
         "svg" | "svgz" => decode_svg(path),
@@ -185,9 +185,8 @@ fn decode_psd(path: &Path) -> Result<Decoded, String> {
         }
         1 => {
             let count_size = if psb { 4 } else { 2 };
-            let counts: Vec<usize> = (0..channels * h)
-                .map(|i| if psb { be32(o + i * 4) } else { be16(o + i * 2) })
-                .collect::<Result<_, _>>()?;
+            let counts: Vec<usize> =
+                (0..channels * h).map(|i| if psb { be32(o + i * 4) } else { be16(o + i * 2) }).collect::<Result<_, _>>()?;
             o += channels * h * count_size;
             for (c, plane) in planes.iter_mut().enumerate() {
                 for y in 0..h {
@@ -223,7 +222,9 @@ fn decode_psd(path: &Path) -> Result<Decoded, String> {
     let sample = |plane: &Vec<u8>, i: usize| if bpc == 2 { plane[i * 2] } else { plane[i] }; // high byte for 16 bit
     let mut rgba = Vec::with_capacity(w * h * 4);
     for i in 0..w * h {
-        let (r, g, b) = if colour == 3 { (sample(&planes[0], i), sample(&planes[1], i), sample(&planes[2], i)) } else {
+        let (r, g, b) = if colour == 3 {
+            (sample(&planes[0], i), sample(&planes[1], i), sample(&planes[2], i))
+        } else {
             let v = sample(&planes[0], i);
             (v, v, v)
         };
@@ -249,10 +250,12 @@ fn decode_xcf(path: &Path) -> Result<Decoded, String> {
     let mut out = vec![0f32; (w * h * 4) as usize]; // premultiplied
     // layers are stored top first
     for layer in file.layers.iter().rev() {
-        let prop = |kind: P| layer.properties.iter().find(|p| p.kind == kind).and_then(|p| match &p.payload {
-            xcf::PropertyPayload::Unknown(b) => Some(b.clone()),
-            _ => None,
-        });
+        let prop = |kind: P| {
+            layer.properties.iter().find(|p| p.kind == kind).and_then(|p| match &p.payload {
+                xcf::PropertyPayload::Unknown(b) => Some(b.clone()),
+                _ => None,
+            })
+        };
         let be32 = |b: &[u8], o: usize| b.get(o..o + 4).map(|x| u32::from_be_bytes([x[0], x[1], x[2], x[3]]));
         if prop(P::PropVisible).and_then(|b| be32(&b, 0)) == Some(0) {
             continue;
@@ -284,7 +287,7 @@ fn decode_xcf(path: &Path) -> Result<Decoded, String> {
     }
     // back to straight alpha
     let mut rgba = Vec::with_capacity(out.len());
-    for px in out.chunks_exact(4) {
+    for px in out.as_chunks::<4>().0 {
         let a = px[3];
         let un = |v: f32| if a > 0.0 { (v / a * 255.0 + 0.5).min(255.0) as u8 } else { 0 };
         rgba.extend_from_slice(&[un(px[0]), un(px[1]), un(px[2]), (a * 255.0 + 0.5) as u8]);
@@ -330,8 +333,13 @@ fn to_srgb(icc: &[u8], rgba: &mut [u8]) {
         return;
     }
     let srgb = lcms2::Profile::new_srgb();
-    let Ok(t) = lcms2::Transform::<[u8; 4], [u8; 4]>::new(&profile, lcms2::PixelFormat::RGBA_8, &srgb, lcms2::PixelFormat::RGBA_8, lcms2::Intent::Perceptual)
-    else {
+    let Ok(t) = lcms2::Transform::<[u8; 4], [u8; 4]>::new(
+        &profile,
+        lcms2::PixelFormat::RGBA_8,
+        &srgb,
+        lcms2::PixelFormat::RGBA_8,
+        lcms2::Intent::Perceptual,
+    ) else {
         return;
     };
     t.transform_in_place(bytemuck::cast_slice_mut(rgba));
@@ -344,7 +352,7 @@ fn animation<'a>(dec: impl AnimationDecoder<'a>) -> Result<Decoded, String> {
     for f in dec.into_frames() {
         let f = f.map_err(|e| e.to_string())?;
         let (num, den) = f.delay().numer_denom_ms();
-        let ms = if den == 0 { 0 } else { num / den };
+        let ms = num.checked_div(den).unwrap_or(0);
         // browsers show very short delays (0..10 ms) as 100 ms
         let delay = Duration::from_millis(if ms <= 10 { 100 } else { ms as u64 });
         let buf = f.into_buffer();
@@ -397,7 +405,7 @@ pub fn render_svg(tree: Arc<resvg::usvg::Tree>, width: u32, height: u32, scale: 
     resvg::render(&tree, ts, &mut pixmap.as_mut());
     // tiny-skia is premultiplied, the renderer expects straight alpha
     let mut rgba = pixmap.take();
-    for px in rgba.chunks_exact_mut(4) {
+    for px in rgba.as_chunks_mut::<4>().0 {
         let a = px[3] as u32;
         if a != 0 && a != 255 {
             for c in &mut px[..3] {
@@ -452,15 +460,17 @@ impl Loader {
         for _ in 0..threads {
             let rx = rx.clone();
             let proxy = proxy.clone();
-            thread::spawn(move || loop {
-                let next = rx.lock().unwrap().recv();
-                let Ok(path) = next else { break };
-                // a crashing decoder (damaged file) must not end Lumaris
-                let result = std::panic::catch_unwind(|| decode(&path))
-                    .unwrap_or_else(|_| Err("the file could not be decoded".into()))
-                    .map(Arc::new);
-                if proxy.send_event(UserEvent::Decoded(path, result)).is_err() {
-                    break;
+            thread::spawn(move || {
+                loop {
+                    let next = rx.lock().unwrap().recv();
+                    let Ok(path) = next else { break };
+                    // a crashing decoder (damaged file) must not end Lumaris
+                    let result = std::panic::catch_unwind(|| decode(&path))
+                        .unwrap_or_else(|_| Err("the file could not be decoded".into()))
+                        .map(Arc::new);
+                    if proxy.send_event(UserEvent::Decoded(path, result)).is_err() {
+                        break;
+                    }
                 }
             });
         }

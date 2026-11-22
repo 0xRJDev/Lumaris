@@ -22,7 +22,7 @@ fn histogram(img: &Decoded) -> Box<[[u32; 256]; 3]> {
     let mut h = Box::new([[0u32; 256]; 3]);
     let pixels = img.rgba.len() / 4;
     let step = (pixels / 1_000_000).max(1);
-    for px in img.rgba.chunks_exact(4).step_by(step) {
+    for px in img.rgba.as_chunks::<4>().0.iter().step_by(step) {
         if px[3] == 0 {
             continue; // transparent
         }
@@ -49,7 +49,9 @@ fn human_size(bytes: u64) -> String {
 fn exif_lines(path: &Path, out: &mut Vec<(String, String)>) {
     let Ok(file) = std::fs::File::open(path) else { return };
     let Ok(exif) = exif::Reader::new().read_from_container(&mut std::io::BufReader::new(file)) else { return };
-    let get = |tag| exif.get_field(tag, exif::In::PRIMARY).map(|f| f.display_value().with_unit(&exif).to_string().trim_matches('"').trim().to_string());
+    let get = |tag| {
+        exif.get_field(tag, exif::In::PRIMARY).map(|f| f.display_value().with_unit(&exif).to_string().trim_matches('"').trim().to_string())
+    };
     let camera = match (get(exif::Tag::Make), get(exif::Tag::Model)) {
         (Some(make), Some(model)) if model.starts_with(&make) || make.is_empty() => Some(model),
         (Some(make), Some(model)) => Some(format!("{make} {model}")),
