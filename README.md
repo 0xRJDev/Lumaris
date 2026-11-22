@@ -77,7 +77,8 @@ applied.
 
 ### <a name="keys"></a><img src="docs/assets/card-keys.png" alt="Keys: press F1 in Lumaris for all of them" width="100%">
 
-Every key can be changed in the settings.
+Every key can be changed on the **Keys** page (F1): click a key to change it, × to remove it,
++ to add one. A key that's already used offers to swap.
 
 | Key | Action |
 |---|---|

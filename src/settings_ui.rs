@@ -1,7 +1,11 @@
 // The settings window, drawn inside the Lumaris window: sections on the left, the settings of
-// the selected section on the right. Changes apply immediately.
+// the selected section on the right. Changes apply immediately. The last section is the Keys
+// page: click a key to change it, x to remove it, + to add one.
 use resvg::tiny_skia::{FillRule, Paint, PathBuilder, Pixmap, Rect, Stroke, Transform};
 
+use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+use crate::keys::{COMMANDS, KeyMap};
 use crate::menu::{self, Action, Item, Menu};
 use crate::settings::{DEFS, Def, Kind, SECTIONS, Settings, Value};
 use crate::ui::{color, draw_text, rounded_rect, style, text_width};
@@ -15,12 +19,34 @@ enum Hit {
     Minus(usize),
     Plus(usize),
     Choice(usize),
+    /// a key of a command (index in COMMANDS, key number)
+    KeyChip(usize, usize),
+    KeyRemove(usize, usize),
+    KeyAdd(usize),
+    ResetKeys,
+    DialogYes,
+    DialogNo,
+}
+
+/// The Keys page: after the sections of the settings
+pub const KEYS: usize = SECTIONS.len();
+
+fn section_name(i: usize) -> &'static str {
+    SECTIONS.get(i).copied().unwrap_or("Keys")
+}
+
+/// A question or notice over the Keys page
+struct Dialog {
+    text: String,
+    /// the key, the command and key number it is for, and the command that has it now
+    swap: Option<(String, usize, Option<usize>, usize)>,
 }
 
 pub enum Outcome {
     Nothing,
     Redraw,
     Changed(Settings),
+    KeysChanged(KeyMap),
     Close,
     EditFile(u8),
 }
@@ -37,12 +63,22 @@ pub struct SettingsPanel {
     choice: Option<(usize, Menu)>,
     scroll: f32,
     max_scroll: f32,
+    keymap: KeyMap,
+    /// keys of the user commands (name, key): they cannot be given to a command
+    user_keys: Vec<(String, String)>,
+    /// waiting for a key: command (index in COMMANDS), key number (None: a new key)
+    capture: Option<(usize, Option<usize>)>,
+    dialog: Option<Dialog>,
 }
 
 impl SettingsPanel {
-    pub fn new(values: Settings, window: (u32, u32), scale: f64) -> SettingsPanel {
+    pub fn new(values: Settings, user_keys: Vec<(String, String)>, window: (u32, u32), scale: f64) -> SettingsPanel {
         let mut p = SettingsPanel {
             values,
+            keymap: crate::keys::current().clone(),
+            user_keys,
+            capture: None,
+            dialog: None,
             section: 0,
             scale: scale as f32,
             window: (0.0, 0.0),
@@ -55,6 +91,120 @@ impl SettingsPanel {
         };
         p.resize(window);
         p
+    }
+
+    /// Shows the Keys page
+    pub fn open_keys(&mut self) {
+        self.section = KEYS;
+        self.scroll = 0.0;
+        self.pixmap = None;
+    }
+
+    pub fn on_keys(&self) -> bool {
+        self.section == KEYS
+    }
+
+    /// Waiting for a key, or a question is open: keys go to `key`
+    pub fn wants_keys(&self) -> bool {
+        self.capture.is_some() || self.dialog.is_some()
+    }
+
+    /// A key pressed while waiting for one (or while a question is open)
+    pub fn key(&mut self, key: &Key, mods: ModifiersState) -> Outcome {
+        if let Some(d) = &self.dialog {
+            return match key {
+                Key::Named(NamedKey::Escape) => self.close_dialog(),
+                Key::Named(NamedKey::Enter) if d.swap.is_some() => self.confirm(),
+                Key::Named(NamedKey::Enter) => self.close_dialog(),
+                _ => Outcome::Nothing,
+            };
+        }
+        let Some((c, slot)) = self.capture else { return Outcome::Nothing };
+        if *key == Key::Named(NamedKey::Escape) {
+            self.capture = None;
+            self.pixmap = None;
+            return Outcome::Redraw;
+        }
+        let Some(spec) = KeyMap::spec_for(key, mods) else { return Outcome::Nothing }; // a modifier alone
+        let shown = KeyMap::display(&spec);
+        let bare = spec.rsplit('+').next().unwrap_or("");
+        if matches!(bare, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9") && !mods.alt_key() {
+            return self.notice(format!("{shown} starts a slideshow (1 to 9 always do). Choose another key."));
+        }
+        if let Some((name, _)) = self.user_keys.iter().find(|(_, k)| KeyMap::same_key(k, &spec)) {
+            return self.notice(format!("{shown} runs your command \u{201c}{name}\u{201d} (commands.conf). Choose another key."));
+        }
+        match self.keymap.command_with(&spec) {
+            Some(other) if other == COMMANDS[c].0 => {
+                self.capture = None; // it already has this key
+                self.pixmap = None;
+                Outcome::Redraw
+            }
+            Some(other) => {
+                let o = COMMANDS.iter().position(|e| e.0 == other).unwrap_or(0);
+                let what = if slot.is_some() { "Swap the keys?" } else { "Move it here?" };
+                self.dialog = Some(Dialog {
+                    text: format!("{shown} is used for \u{201c}{}\u{201d}. {what}", COMMANDS[o].2),
+                    swap: Some((spec, c, slot, o)),
+                });
+                self.pixmap = None;
+                Outcome::Redraw
+            }
+            None => self.assign(c, slot, spec, None),
+        }
+    }
+
+    fn notice(&mut self, text: String) -> Outcome {
+        self.capture = None;
+        self.dialog = Some(Dialog { text, swap: None });
+        self.pixmap = None;
+        Outcome::Redraw
+    }
+
+    fn close_dialog(&mut self) -> Outcome {
+        self.dialog = None;
+        self.capture = None;
+        self.pixmap = None;
+        Outcome::Redraw
+    }
+
+    fn confirm(&mut self) -> Outcome {
+        match self.dialog.take().and_then(|d| d.swap) {
+            Some((spec, c, slot, other)) => self.assign(c, slot, spec, Some(other)),
+            None => self.close_dialog(),
+        }
+    }
+
+    /// Gives command `c` the key (replacing key number `slot`, or as a new key). `other`: the
+    /// command that had it; it gets the replaced key instead (swap), or loses the key.
+    fn assign(&mut self, c: usize, slot: Option<usize>, spec: String, other: Option<usize>) -> Outcome {
+        let cmd = COMMANDS[c].0;
+        let mut keys = self.keymap.keys(cmd);
+        let replaced = match slot {
+            Some(k) if k < keys.len() => Some(std::mem::replace(&mut keys[k], spec.clone())),
+            _ => {
+                keys.push(spec.clone());
+                None
+            }
+        };
+        if let Some(o) = other {
+            let ocmd = COMMANDS[o].0;
+            let mut theirs = self.keymap.keys(ocmd);
+            if let Some(pos) = theirs.iter().position(|k| KeyMap::same_key(k, &spec)) {
+                match replaced {
+                    Some(r) if !theirs.iter().any(|k| KeyMap::same_key(k, &r)) => theirs[pos] = r,
+                    _ => {
+                        theirs.remove(pos);
+                    }
+                }
+            }
+            self.keymap.set_keys(ocmd, &theirs);
+        }
+        self.keymap.set_keys(cmd, &keys);
+        self.capture = None;
+        self.dialog = None;
+        self.pixmap = None;
+        Outcome::KeysChanged(self.keymap.clone())
     }
 
     fn u(&self, v: f32) -> f32 {
@@ -77,7 +227,7 @@ impl SettingsPanel {
     }
 
     fn defs(&self) -> impl Iterator<Item = (usize, &'static Def)> {
-        let section = SECTIONS[self.section];
+        let section = section_name(self.section);
         DEFS.iter().enumerate().filter(move |(_, d)| d.section == section)
     }
 
@@ -108,12 +258,50 @@ impl SettingsPanel {
                 _ => Outcome::Nothing,
             };
         }
+        if self.dialog.is_some() {
+            return match self.hit(p) {
+                Some(Hit::DialogYes) => self.confirm(),
+                Some(Hit::DialogNo) => self.close_dialog(),
+                _ => Outcome::Nothing,
+            };
+        }
         let (rx, ry, rw, rh) = self.rect;
         let (x, y) = (p.0 as f32, p.1 as f32);
         if x < rx || y < ry || x >= rx + rw || y >= ry + rh {
             return Outcome::Close;
         }
+        if self.capture.take().is_some() {
+            // a click while waiting for a key: stop waiting
+            self.pixmap = None;
+            return Outcome::Redraw;
+        }
         match self.hit(p) {
+            Some(Hit::KeyChip(c, k)) => {
+                self.capture = Some((c, Some(k)));
+                self.pixmap = None;
+                Outcome::Redraw
+            }
+            Some(Hit::KeyAdd(c)) => {
+                self.capture = Some((c, None));
+                self.pixmap = None;
+                Outcome::Redraw
+            }
+            Some(Hit::KeyRemove(c, k)) => {
+                let cmd = COMMANDS[c].0;
+                let mut keys = self.keymap.keys(cmd);
+                if k < keys.len() {
+                    keys.remove(k);
+                }
+                self.keymap.set_keys(cmd, &keys);
+                self.pixmap = None;
+                Outcome::KeysChanged(self.keymap.clone())
+            }
+            Some(Hit::ResetKeys) => {
+                self.keymap = KeyMap::defaults();
+                self.pixmap = None;
+                Outcome::KeysChanged(self.keymap.clone())
+            }
+            Some(Hit::DialogYes | Hit::DialogNo) => Outcome::Nothing,
             Some(Hit::Section(s)) => {
                 self.section = s;
                 self.scroll = 0.0;
@@ -226,7 +414,8 @@ impl SettingsPanel {
         stroke(&mut pm, &mut paint, rounded_rect(0.5, 0.5, w - 1.0, h - 1.0, self.u(8.0)), st.text, 0.18, 1.0);
         draw_text(&mut pm, font, "Settings", title, self.u(20.0), baseline_in(self.u(14.0), self.u(40.0), title), st.text, 1.0);
         let item_h = self.u(34.0);
-        for (i, name) in SECTIONS.iter().enumerate() {
+        for i in 0..=KEYS {
+            let name = section_name(i);
             let top = self.u(64.0) + item_h * i as f32;
             if i == self.section {
                 let r = rounded_rect(self.u(8.0), top, side - self.u(16.0), item_h, self.u(4.0));
@@ -262,12 +451,32 @@ impl SettingsPanel {
         // settings of the section
         let left = side + self.u(28.0);
         let right = w - self.u(28.0);
-        draw_text(&mut pm, font, SECTIONS[self.section], title, left, baseline_in(self.u(14.0), self.u(40.0), title), st.text, 1.0);
+        draw_text(&mut pm, font, section_name(self.section), title, left, baseline_in(self.u(14.0), self.u(40.0), title), st.text, 1.0);
+        if self.section == KEYS {
+            let reset = "Reset to defaults";
+            let tw = text_width(font, reset, small);
+            let tx = w - self.u(56.0) - tw;
+            draw_text(&mut pm, font, reset, small, tx, baseline_in(self.u(14.0), self.u(40.0), small), st.selection, 1.0);
+            hits.push((Hit::ResetKeys, rx + tx - self.u(8.0), ry + self.u(14.0), tw + self.u(16.0), self.u(40.0)));
+        }
         // the settings rows scroll inside this area
         let area_top = self.u(64.0);
         let area_h = (h - area_top - self.u(12.0)).max(1.0);
         let mut cpm = Pixmap::new(w as u32, area_h as u32)?;
-        let content_h = self.u(6.0) + self.u(64.0) * self.defs().count() as f32 + self.u(6.0);
+        let key_row_h = self.u(44.0);
+        let notes = [
+            ("1 \u{2026} 9", "Slideshow, seconds per image (Ctrl: tenths)"),
+            ("Mouse wheel", "Zoom (Ctrl: next / previous image)"),
+            ("Drag", "Move the image"),
+            ("Double click", "Full screen"),
+            ("Right click", "Menu"),
+            ("Mouse back / forward", "Previous / next image"),
+        ];
+        let content_h = if self.section == KEYS {
+            self.u(6.0) + key_row_h * (COMMANDS.len() + notes.len()) as f32 + self.u(18.0)
+        } else {
+            self.u(6.0) + self.u(64.0) * self.defs().count() as f32 + self.u(6.0)
+        };
         self.max_scroll = (content_h - area_h).max(0.0);
         self.scroll = self.scroll.clamp(0.0, self.max_scroll);
         let screen_top = ry + area_top;
@@ -278,8 +487,90 @@ impl SettingsPanel {
                 hits.push((hit, x, screen_top + y0, hw, y1 - y0));
             }
         };
+        if self.section == KEYS {
+            let mid_of = |top: f32| top + key_row_h / 2.0;
+            for (c, (cmd, _, desc, _)) in COMMANDS.iter().enumerate() {
+                let top = self.u(6.0) + key_row_h * c as f32 - self.scroll;
+                if top + key_row_h < 0.0 || top > area_h {
+                    continue;
+                }
+                if c > 0 {
+                    paint.set_color(color(st.text, 0.08));
+                    if let Some(r) = Rect::from_xywh(left, top, right - left, 1.0) {
+                        cpm.fill_rect(r, &paint, Transform::identity(), None);
+                    }
+                }
+                let mid = mid_of(top);
+                draw_text(&mut cpm, font, desc, px, left, baseline_in(top, key_row_h, px), st.text, 1.0);
+                // + (add a key) at the right, the keys to its left
+                let b = self.u(26.0);
+                let by = (mid - b / 2.0).round();
+                let mut x = right - b;
+                let r = rounded_rect(x, by, b, b, self.u(4.0));
+                fill(&mut cpm, &mut paint, r.clone(), st.text, 0.06);
+                stroke(&mut cpm, &mut paint, r, st.text, 0.25, 1.0);
+                let (cx, cy, s5) = (x + b / 2.0, by + b / 2.0, self.u(5.0));
+                let mut pb = PathBuilder::new();
+                pb.move_to(cx - s5, cy);
+                pb.line_to(cx + s5, cy);
+                pb.move_to(cx, cy - s5);
+                pb.line_to(cx, cy + s5);
+                stroke(&mut cpm, &mut paint, pb.finish(), st.text, 0.8, self.u(1.4));
+                push_hit(&mut hits, Hit::KeyAdd(c), rx + x, by, b, b);
+                let keys = self.keymap.keys(*cmd);
+                let waiting = |k: Option<usize>| self.capture == Some((c, k));
+                let mut chips: Vec<(Option<usize>, String)> =
+                    keys.iter().enumerate().map(|(k, spec)| (Some(k), KeyMap::display(spec))).collect();
+                if waiting(None) {
+                    chips.push((None, String::new()));
+                }
+                for (k, text) in chips.into_iter().rev() {
+                    let active = waiting(k);
+                    let text = if active { "Press a key\u{2026}".to_string() } else { text };
+                    let remove_w = if k.is_some() && !active { self.u(20.0) } else { 0.0 };
+                    let cw = text_width(font, &text, small) + self.u(20.0) + remove_w;
+                    x -= cw + self.u(6.0);
+                    if x < left + self.u(220.0) {
+                        break; // no room left next to the description
+                    }
+                    let r = rounded_rect(x, by, cw, b, self.u(4.0));
+                    if active {
+                        fill(&mut cpm, &mut paint, r.clone(), st.selection, 0.35);
+                        stroke(&mut cpm, &mut paint, r, st.selection, 0.9, 1.0);
+                    } else {
+                        fill(&mut cpm, &mut paint, r.clone(), st.text, 0.08);
+                        stroke(&mut cpm, &mut paint, r, st.text, 0.3, 1.0);
+                    }
+                    draw_text(&mut cpm, font, &text, small, x + self.u(10.0), baseline_in(by, b, small), st.text, 1.0);
+                    if let Some(k) = k {
+                        if remove_w > 0.0 {
+                            let (cx, cy, s4) = (x + cw - self.u(14.0), by + b / 2.0, self.u(3.5));
+                            let mut pb = PathBuilder::new();
+                            pb.move_to(cx - s4, cy - s4);
+                            pb.line_to(cx + s4, cy + s4);
+                            pb.move_to(cx + s4, cy - s4);
+                            pb.line_to(cx - s4, cy + s4);
+                            stroke(&mut cpm, &mut paint, pb.finish(), st.text, 0.55, self.u(1.3));
+                            push_hit(&mut hits, Hit::KeyRemove(c, k), rx + x + cw - remove_w - self.u(4.0), by, remove_w + self.u(4.0), b);
+                        }
+                        push_hit(&mut hits, Hit::KeyChip(c, k), rx + x, by, cw - remove_w - self.u(4.0), b);
+                    }
+                }
+            }
+            // what cannot be changed
+            for (n, (k, d)) in notes.iter().enumerate() {
+                let top = self.u(18.0) + key_row_h * (COMMANDS.len() + n) as f32 - self.scroll;
+                if top + key_row_h < 0.0 || top > area_h {
+                    continue;
+                }
+                let base = baseline_in(top, key_row_h, px);
+                draw_text(&mut cpm, font, d, px, left, base, st.text, 0.55);
+                let tw = text_width(font, k, small);
+                draw_text(&mut cpm, font, k, small, right - tw - self.u(4.0), base, st.text, 0.55);
+            }
+        }
         let row_h = self.u(64.0);
-        let defs: Vec<(usize, &Def)> = self.defs().collect();
+        let defs: Vec<(usize, &Def)> = if self.section == KEYS { Vec::new() } else { self.defs().collect() };
         for (n, (i, d)) in defs.into_iter().enumerate() {
             let top = self.u(6.0) + row_h * n as f32 - self.scroll;
             if top + row_h < 0.0 || top > area_h {
@@ -365,6 +656,70 @@ impl SettingsPanel {
             fill(&mut cpm, &mut paint, rounded_rect(w - self.u(10.0), y, self.u(4.0), bar, self.u(2.0)), st.text, 0.3);
         }
         pm.draw_pixmap(0, area_top as i32, cpm.as_ref(), &Default::default(), Transform::identity(), None);
+        if let Some(d) = &self.dialog {
+            // the question over the dimmed panel; only its buttons take clicks
+            paint.set_color(color([0, 0, 0], 0.35));
+            if let Some(r) = Rect::from_xywh(0.0, 0.0, w, h) {
+                pm.fill_rect(r, &paint, Transform::identity(), None);
+            }
+            let dw = (w - self.u(48.0)).min(self.u(460.0));
+            let pad = self.u(20.0);
+            // the text in lines that fit
+            let mut lines: Vec<String> = Vec::new();
+            for word in d.text.split(' ') {
+                match lines.last_mut() {
+                    Some(l) if text_width(font, &format!("{l} {word}"), px) <= dw - pad * 2.0 => {
+                        l.push(' ');
+                        l.push_str(word);
+                    }
+                    _ => lines.push(word.to_string()),
+                }
+            }
+            let line_h = self.u(24.0);
+            let bh = self.u(30.0);
+            let dh = pad * 2.0 + line_h * lines.len() as f32 + self.u(14.0) + bh;
+            let (dx, dy) = (((w - dw) / 2.0).round(), ((h - dh) / 2.0).round());
+            let r = rounded_rect(dx, dy, dw, dh, self.u(8.0));
+            fill(&mut pm, &mut paint, r.clone(), st.background, 1.0);
+            stroke(&mut pm, &mut paint, r, st.text, 0.25, 1.0);
+            for (n, l) in lines.iter().enumerate() {
+                draw_text(&mut pm, font, l, px, dx + pad, baseline_in(dy + pad + line_h * n as f32, line_h, px), st.text, 1.0);
+            }
+            let buttons: Vec<(&str, Hit, bool)> = if d.swap.is_some() {
+                vec![
+                    ("Cancel", Hit::DialogNo, false),
+                    (if d.swap.as_ref().is_some_and(|s| s.2.is_none()) { "Move" } else { "Swap" }, Hit::DialogYes, true),
+                ]
+            } else {
+                vec![("OK", Hit::DialogNo, true)]
+            };
+            let mut x = dx + dw - pad;
+            let by = dy + dh - pad - bh;
+            for (label, hit, main) in buttons.into_iter().rev() {
+                let bw = (text_width(font, label, px) + self.u(32.0)).max(self.u(84.0));
+                x -= bw;
+                let r = rounded_rect(x, by, bw, bh, self.u(4.0));
+                if main {
+                    fill(&mut pm, &mut paint, r.clone(), st.selection, 0.85);
+                } else {
+                    fill(&mut pm, &mut paint, r.clone(), st.text, 0.08);
+                    stroke(&mut pm, &mut paint, r, st.text, 0.3, 1.0);
+                }
+                let tw = text_width(font, label, px);
+                draw_text(
+                    &mut pm,
+                    font,
+                    label,
+                    px,
+                    x + (bw - tw) / 2.0,
+                    baseline_in(by, bh, px),
+                    if main { [255, 255, 255] } else { st.text },
+                    1.0,
+                );
+                hits.push((hit, rx + x, ry + by, bw, bh));
+                x -= self.u(10.0);
+            }
+        }
         self.hits = hits;
         Some(pm)
     }

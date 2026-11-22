@@ -124,7 +124,6 @@ struct App {
     overlay_size: (u32, u32),
     info: Option<info::InfoBox>,
     info_zoom: f64,
-    help: Option<info::InfoBox>,
     /// view orientation: bits 0-1 rotation (90° steps clockwise), bit 2 flipped horizontally
     orient: u32,
     last_click: Option<(Instant, (f64, f64))>,
@@ -465,27 +464,17 @@ impl App {
         }
     }
 
+    /// F1: the Keys page of the settings (closes it when it is shown)
     fn toggle_help(&mut self) {
-        if self.help.take().is_some() {
-            self.sync_overlays();
-            return;
+        if self.settings_panel.as_ref().is_some_and(|p| p.on_keys()) {
+            return self.close_settings();
         }
-        let km = keys::current();
-        let mut lines: Vec<(String, String)> =
-            keys::COMMANDS.iter().map(|(cmd, _, desc, _)| (km.shortcuts(*cmd), desc.to_string())).filter(|(k, _)| !k.is_empty()).collect();
-        for (k, d) in [
-            ("1 … 9", "Slideshow, seconds per image (Ctrl: tenths)"),
-            ("Mouse wheel", "Zoom (Ctrl: next / previous image)"),
-            ("Drag", "Move the image"),
-            ("Double click", "Full screen"),
-            ("Right click", "Menu"),
-            ("Mouse back / forward", "Previous / next image"),
-        ] {
-            lines.push((k.into(), d.into()));
+        if self.settings_panel.is_none() {
+            self.open_settings();
         }
-        drop(km);
-        let scale = self.window.as_ref().map(|w| w.scale_factor()).unwrap_or(1.0);
-        self.help = Some(info::InfoBox::with_lines(lines, scale));
+        if let Some(p) = self.settings_panel.as_mut() {
+            p.open_keys();
+        }
         self.sync_overlays();
     }
 
@@ -541,9 +530,7 @@ impl App {
             Trash => self.move_to_trash(event_loop),
             Wallpaper => self.run(event_loop, menu::Action::Wallpaper),
             Close => {
-                if self.help.is_some() {
-                    self.toggle_help();
-                } else if self.info.is_some() {
+                if self.info.is_some() {
                     self.toggle_info();
                 } else if self.slideshow.is_some() {
                     self.stop_slideshow();
@@ -595,7 +582,8 @@ impl App {
             self.apply_window_size(PhysicalSize::new(s.width.max(ww), s.height.max(wh)));
         }
         let s = window.inner_size();
-        self.settings_panel = Some(settings_ui::SettingsPanel::new(settings::current().clone(), (s.width, s.height), scale));
+        let user_keys = self.user_commands.iter().map(|c| (c.name.clone(), c.key.clone())).collect();
+        self.settings_panel = Some(settings_ui::SettingsPanel::new(settings::current().clone(), user_keys, (s.width, s.height), scale));
         self.sync_overlays();
     }
 
@@ -612,11 +600,20 @@ impl App {
 
     fn settings_click(&mut self, at: (f64, f64)) {
         let Some(p) = self.settings_panel.as_mut() else { return };
-        match p.click(at) {
+        let outcome = p.click(at);
+        self.settings_outcome(outcome);
+    }
+
+    fn settings_outcome(&mut self, outcome: settings_ui::Outcome) {
+        match outcome {
             settings_ui::Outcome::Nothing => {}
             settings_ui::Outcome::Redraw => self.sync_overlays(),
             settings_ui::Outcome::Changed(s) => {
                 self.change_settings(s);
+                self.sync_overlays();
+            }
+            settings_ui::Outcome::KeysChanged(map) => {
+                keys::replace(map);
                 self.sync_overlays();
             }
             settings_ui::Outcome::Close => self.close_settings(),
@@ -1013,20 +1010,17 @@ impl App {
             self.nav.set_image(&img.rgba, img.pixel_width, img.pixel_height, self.orient);
         }
         let show_nav = self.navigation_panel && self.settings_panel.is_none();
-        let App { renderer, menu, settings_panel, info, help, nav, toast, .. } = self;
+        let App { renderer, menu, settings_panel, info, nav, toast, .. } = self;
         if let Some(r) = renderer.as_mut() {
             let mut layers = Vec::new();
             if let Some(i) = info.as_mut() {
-                layers.extend(i.layer(size));
+                layers.extend(i.layer());
             }
             if show_nav {
                 layers.extend(nav.layers());
             }
             if let Some(t) = toast.layer(size) {
                 layers.push(t);
-            }
-            if let Some(h) = help.as_mut() {
-                layers.extend(h.layer(size));
             }
             if let Some(p) = settings_panel.as_mut() {
                 layers.extend(p.layers());
@@ -1148,6 +1142,14 @@ impl App {
             return;
         }
         if let Some(p) = self.settings_panel.as_mut() {
+            if p.wants_keys() {
+                // waiting for a new key on the Keys page, or a question about one
+                let outcome = p.key(&key, self.mods);
+                return self.settings_outcome(outcome);
+            }
+            if keys::current().lookup(&key, self.mods) == Some(keys::Command::Help) {
+                return self.toggle_help();
+            }
             if key == Key::Named(NamedKey::Escape) {
                 if p.escape() {
                     self.close_settings();
@@ -1155,11 +1157,6 @@ impl App {
                     self.sync_overlays();
                 }
             }
-            return;
-        }
-        if self.help.is_some() && key != Key::Named(NamedKey::F1) {
-            // any key closes the help
-            self.toggle_help();
             return;
         }
         // 1..9: slideshow with 1..9 seconds per image (Ctrl: tenths, Ctrl+Shift: hundredths)
@@ -1479,7 +1476,7 @@ impl ApplicationHandler<UserEvent> for App {
                 }
                 self.view.resize(s.width, s.height);
                 // panels placed relative to the window size
-                if self.help.is_some() || self.toast.deadline().is_some() || self.navigation_panel {
+                if self.toast.deadline().is_some() || self.navigation_panel {
                     self.sync_overlays();
                 }
                 self.redraw();
@@ -1489,7 +1486,7 @@ impl ApplicationHandler<UserEvent> for App {
                 self.follow_zoom(event_loop);
                 // the window resized itself (following the zoom): place the panels again
                 let size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height)).unwrap_or((1, 1));
-                if size != self.overlay_size && (self.toast.deadline().is_some() || self.help.is_some() || self.navigation_panel) {
+                if size != self.overlay_size && (self.toast.deadline().is_some() || self.navigation_panel) {
                     self.sync_overlays();
                 }
                 // the zoom while zooming (not for fitting a new image)
@@ -1796,7 +1793,6 @@ fn main() {
         overlay_size: (0, 0),
         info: None,
         info_zoom: 0.0,
-        help: None,
         orient: 0,
         last_click: None,
         user_commands: commands::load(),

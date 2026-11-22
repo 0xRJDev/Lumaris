@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keys page in the settings (F1, replaces the key list): click a key to change it, × removes it,
+  + adds one; a key that is already used offers to swap. Saved to keys.conf at once
 - Fixed: dark fringes along transparent edges when zoomed (pixel art outlines, smooth zoom and
   zooming out). Images are now held on the GPU with premultiplied alpha
 - Hidden images (name starting with a dot) are skipped while browsing; opening one directly still

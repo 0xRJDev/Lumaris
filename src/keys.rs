@@ -170,12 +170,13 @@ fn label(b: &Binding) -> String {
     s
 }
 
+#[derive(Clone)]
 pub struct KeyMap {
     bindings: Vec<(Command, Vec<Binding>)>,
 }
 
 impl KeyMap {
-    fn defaults() -> KeyMap {
+    pub fn defaults() -> KeyMap {
         KeyMap { bindings: COMMANDS.iter().map(|(c, _, _, keys)| (*c, keys.iter().filter_map(|k| parse(k)).collect())).collect() }
     }
 
@@ -201,27 +202,33 @@ impl KeyMap {
     pub fn write_file_if_missing() -> PathBuf {
         let path = Self::path();
         if !path.exists() {
-            let mut out = String::from(
-                "# Lumaris key bindings. One line per command: Command = Key, Key ...\n\
-                 # Keys: letters, digits, F1..F12, Left, Right, Up, Down, PageUp, PageDown, Home, End, Space,\n\
-                 # Enter, Backspace, Delete, Escape, Tab, Plus, Minus, Equal, Comma, Period. Modifiers: Ctrl+, Shift+, Alt+\n\
-                 # An empty value removes all keys of a command. 1..9 always start a slideshow.\n\
-                 # Restart Lumaris after editing this file.\n\n",
-            );
-            let current = map().read().unwrap();
-            for (cmd, name, desc, _) in COMMANDS {
-                let keys = current.keys(*cmd).join(", ");
-                out.push_str(&format!("# {desc}\n{name} = {keys}\n"));
-            }
-            if let Some(dir) = path.parent() {
-                let _ = std::fs::create_dir_all(dir);
-            }
-            let _ = std::fs::write(&path, out);
+            let _ = current().save();
         }
         path
     }
 
-    fn keys(&self, cmd: Command) -> Vec<String> {
+    /// Writes keys.conf with all commands and their keys.
+    pub fn save(&self) -> std::io::Result<()> {
+        let mut out = String::from(
+            "# Lumaris key bindings. One line per command: Command = Key, Key ...\n\
+             # Keys: letters, digits, F1..F12, Left, Right, Up, Down, PageUp, PageDown, Home, End, Space,\n\
+             # Enter, Backspace, Delete, Escape, Tab, Plus, Minus, Equal, Comma, Period. Modifiers: Ctrl+, Shift+, Alt+\n\
+             # An empty value removes all keys of a command. 1..9 always start a slideshow.\n\
+             # Changed by the Keys page of the settings (F1). After editing this file, restart Lumaris.\n\n",
+        );
+        for (cmd, name, desc, _) in COMMANDS {
+            let keys = self.keys(*cmd).join(", ");
+            out.push_str(&format!("# {desc}\n{name} = {keys}\n"));
+        }
+        let path = Self::path();
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir)?;
+        }
+        std::fs::write(&path, out)
+    }
+
+    /// The keys of a command, as written in keys.conf ("Ctrl+Shift+C")
+    pub fn keys(&self, cmd: Command) -> Vec<String> {
         self.bindings
             .iter()
             .find(|(c, _)| *c == cmd)
@@ -264,6 +271,58 @@ impl KeyMap {
         })
     }
 
+    /// Gives a command these keys (as written in keys.conf).
+    pub fn set_keys(&mut self, cmd: Command, keys: &[String]) {
+        if let Some(entry) = self.bindings.iter_mut().find(|(c, _)| *c == cmd) {
+            entry.1 = keys.iter().filter_map(|k| parse(k)).collect();
+        }
+    }
+
+    /// The command that has this key
+    pub fn command_with(&self, spec: &str) -> Option<Command> {
+        let b = parse(spec)?;
+        self.bindings.iter().find(|(_, list)| list.contains(&b)).map(|(c, _)| *c)
+    }
+
+    /// Whether two key descriptions mean the same key
+    pub fn same_key(a: &str, b: &str) -> bool {
+        parse(a).is_some_and(|a| parse(b) == Some(a))
+    }
+
+    /// Description of a pressed key for keys.conf ("Ctrl+Shift+C"). None for modifier keys alone.
+    pub fn spec_for(key: &Key, mods: ModifiersState) -> Option<String> {
+        if let Key::Named(
+            NamedKey::Shift
+            | NamedKey::Control
+            | NamedKey::Alt
+            | NamedKey::AltGraph
+            | NamedKey::Super
+            | NamedKey::Meta
+            | NamedKey::Hyper
+            | NamedKey::CapsLock
+            | NamedKey::NumLock
+            | NamedKey::Fn
+            | NamedKey::FnLock,
+        ) = key
+        {
+            return None;
+        }
+        let name = key_name(key)?;
+        let letter = name.chars().count() == 1 && name.chars().all(|c| c.is_alphabetic());
+        let named = name.chars().count() > 1 && !matches!(name.as_str(), "Plus" | "Minus" | "Equal" | "Comma" | "Period" | "Slash");
+        let mut s = String::new();
+        if mods.control_key() {
+            s.push_str("Ctrl+");
+        }
+        if mods.alt_key() {
+            s.push_str("Alt+");
+        }
+        if mods.shift_key() && (letter || named) {
+            s.push_str("Shift+");
+        }
+        Some(s + &name)
+    }
+
     /// Whether a key description like "Ctrl+G" matches the pressed key (user commands)
     pub fn matches(spec: &str, key: &Key, mods: ModifiersState) -> bool {
         let m = KeyMap { bindings: vec![(Command::Quit, parse(spec).into_iter().collect())] };
@@ -279,11 +338,6 @@ impl KeyMap {
     pub fn shortcut(&self, cmd: Command) -> String {
         self.bindings.iter().find(|(c, _)| *c == cmd).and_then(|(_, b)| b.first()).map(label).unwrap_or_default()
     }
-
-    /// All keys of a command for the help
-    pub fn shortcuts(&self, cmd: Command) -> String {
-        self.bindings.iter().find(|(c, _)| *c == cmd).map(|(_, b)| b.iter().map(label).collect::<Vec<_>>().join(", ")).unwrap_or_default()
-    }
 }
 
 fn map() -> &'static RwLock<KeyMap> {
@@ -293,6 +347,14 @@ fn map() -> &'static RwLock<KeyMap> {
 
 pub fn current() -> std::sync::RwLockReadGuard<'static, KeyMap> {
     map().read().unwrap()
+}
+
+/// New key bindings (from the Keys page): used from now on and saved.
+pub fn replace(new: KeyMap) {
+    if let Err(e) = new.save() {
+        eprintln!("lumaris: cannot save the key bindings: {e}");
+    }
+    *map().write().unwrap() = new;
 }
 
 #[cfg(test)]
@@ -309,5 +371,22 @@ mod tests {
         assert_eq!(m.lookup(&Key::Character("c".into()), ModifiersState::CONTROL), Some(CopyImage));
         assert_eq!(m.lookup(&Key::Character(",".into()), ModifiersState::CONTROL), Some(Settings));
         assert_eq!(m.shortcut(CopyPath), "Ctrl+Shift+C");
+    }
+
+    #[test]
+    fn editing() {
+        let mut m = KeyMap::defaults();
+        let spec = |k: Key, mods| KeyMap::spec_for(&k, mods).unwrap();
+        assert_eq!(spec(Key::Character("c".into()), ModifiersState::CONTROL | ModifiersState::SHIFT), "Ctrl+Shift+C");
+        // Shift is part of "+", not a modifier of it
+        assert_eq!(spec(Key::Character("+".into()), ModifiersState::SHIFT), "Plus");
+        assert!(KeyMap::spec_for(&Key::Named(NamedKey::Control), ModifiersState::CONTROL).is_none());
+        assert_eq!(m.command_with("Ctrl+C"), Some(CopyImage));
+        assert_eq!(m.command_with("ctrl+c"), Some(CopyImage));
+        assert!(KeyMap::same_key("Ctrl+Comma", "control+comma"));
+        m.set_keys(CopyImage, &["Ctrl+K".into()]);
+        assert_eq!(m.command_with("Ctrl+C"), None);
+        assert_eq!(m.keys(CopyImage), ["Ctrl+K"]);
+        assert_eq!(m.lookup(&Key::Character("k".into()), ModifiersState::CONTROL), Some(CopyImage));
     }
 }

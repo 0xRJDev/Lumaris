@@ -11,8 +11,6 @@ pub struct InfoBox {
     lines: Vec<(String, String)>,
     pixmap: Option<Pixmap>,
     scale: f32,
-    /// centred in the window (help) instead of the top left corner (image info)
-    centered: bool,
     /// red, green, blue histograms (256 levels)
     histogram: Option<Box<[[u32; 256]; 3]>>,
 }
@@ -114,29 +112,16 @@ impl InfoBox {
         }
         lines.push(("Zoom".into(), format!("{:.0}%", zoom * 100.0)));
         exif_lines(path, &mut lines);
-        InfoBox { lines, pixmap: None, scale: scale as f32, centered: false, histogram: img.map(histogram) }
-    }
-
-    /// A box with the given lines (label, text), centred in the window
-    pub fn with_lines(lines: Vec<(String, String)>, scale: f64) -> InfoBox {
-        InfoBox { lines, pixmap: None, scale: scale as f32, centered: true, histogram: None }
+        InfoBox { lines, pixmap: None, scale: scale as f32, histogram: img.map(histogram) }
     }
 
     /// The box as a premultiplied RGBA image (pixels, width, height, x, y)
-    pub fn layer(&mut self, window: (u32, u32)) -> Option<(&[u8], u32, u32, i32, i32)> {
+    pub fn layer(&mut self) -> Option<(&[u8], u32, u32, i32, i32)> {
         if self.pixmap.is_none() {
             self.pixmap = self.paint();
         }
         let margin = (12.0 * self.scale) as i32;
-        let centered = self.centered;
-        self.pixmap.as_ref().map(|p| {
-            let (x, y) = if centered {
-                (((window.0 as i32 - p.width() as i32) / 2).max(0), ((window.1 as i32 - p.height() as i32) / 2).max(0))
-            } else {
-                (margin, margin)
-            };
-            (p.data(), p.width(), p.height(), x, y)
-        })
+        self.pixmap.as_ref().map(|p| (p.data(), p.width(), p.height(), margin, margin))
     }
 
     fn paint(&self) -> Option<Pixmap> {
