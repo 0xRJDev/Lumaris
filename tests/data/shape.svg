@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80">
+  <rect x="10" y="10" width="60" height="40" fill="#e05050"/>
+  <circle cx="90" cy="50" r="20" fill="#4080e0" fill-opacity="0.5"/>
+  <text x="10" y="74" font-size="12" fill="#000">Lumaris</text>
+</svg>

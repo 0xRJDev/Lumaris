@@ -35,7 +35,7 @@ impl Gpu {
     }
 
     async fn with_backends(backends: wgpu::Backends) -> Result<Gpu, String> {
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor { backends, ..Default::default() });
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor { backends, ..wgpu::InstanceDescriptor::new_without_display_handle() });
         let adapter = instance
             .request_adapter(&wgpu::RequestAdapterOptions {
                 power_preference: if crate::settings::current().bool("PreferDedicatedGpu") {
@@ -45,6 +45,7 @@ impl Gpu {
                 },
                 force_fallback_adapter: false,
                 compatible_surface: None,
+                apply_limit_buckets: false,
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -55,6 +56,7 @@ impl Gpu {
                 required_limits: wgpu::Limits::default().using_resolution(adapter.limits()),
                 memory_hints: wgpu::MemoryHints::MemoryUsage,
                 trace: wgpu::Trace::Off,
+                experimental_features: wgpu::ExperimentalFeatures::disabled(),
             })
             .await
             .map_err(|e| e.to_string())?;
@@ -156,6 +158,7 @@ impl Renderer {
             desired_maximum_frame_latency: 2,
             alpha_mode,
             view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
         };
         surface.configure(&gpu.device, &config);
 
@@ -230,7 +233,11 @@ impl Renderer {
                 address_mode_v: wgpu::AddressMode::ClampToEdge,
                 mag_filter: filter,
                 min_filter: filter,
-                mipmap_filter: filter,
+                mipmap_filter: if filter == wgpu::FilterMode::Linear {
+                    wgpu::MipmapFilterMode::Linear
+                } else {
+                    wgpu::MipmapFilterMode::Nearest
+                },
                 ..Default::default()
             })
         };
@@ -432,6 +439,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &dst,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 ..Default::default()
@@ -463,6 +471,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &dst,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
                 })],
                 ..Default::default()
@@ -533,13 +542,13 @@ impl Renderer {
     pub fn render(&mut self, rect: [f32; 4], zoom: f64, orient: u32, fade: Option<f32>) {
         self.last_draw = (rect, zoom, orient);
         let frame = match self.surface.get_current_texture() {
-            Ok(f) => f,
-            Err(wgpu::SurfaceError::Outdated | wgpu::SurfaceError::Lost) => {
+            wgpu::CurrentSurfaceTexture::Success(f) | wgpu::CurrentSurfaceTexture::Suboptimal(f) => f,
+            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
                 self.surface.configure(&self.gpu.device, &self.config);
                 self.window.request_redraw();
                 return;
             }
-            Err(_) => return,
+            _ => return,
         };
         let target = frame.texture.create_view(&Default::default());
         let mut encoder = self.gpu.device.create_command_encoder(&Default::default());
@@ -549,6 +558,7 @@ impl Renderer {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &target,
                     resolve_target: None,
+                    depth_slice: None,
                     ops: wgpu::Operations { load: wgpu::LoadOp::Clear(self.background), store: wgpu::StoreOp::Store },
                 })],
                 ..Default::default()
@@ -588,7 +598,7 @@ impl Renderer {
         }
         self.gpu.queue.submit([encoder.finish()]);
         self.window.pre_present_notify();
-        frame.present();
+        self.gpu.queue.present(frame);
     }
 }
 
@@ -632,8 +642,8 @@ fn make_pipeline(
     let module = device.create_shader_module(shader);
     let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
         label: None,
-        bind_group_layouts: &[layout],
-        push_constant_ranges: &[],
+        bind_group_layouts: &[Some(layout)],
+        immediate_size: 0,
     });
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: None,
@@ -652,7 +662,7 @@ fn make_pipeline(
                 write_mask: wgpu::ColorWrites::ALL,
             })],
         }),
-        multiview: None,
+        multiview_mask: None,
         cache: None,
     })
 }

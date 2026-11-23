@@ -12,8 +12,9 @@ pub fn images(archive: &Path) -> Option<Vec<String>> {
     let zip = zip::ZipArchive::new(std::fs::File::open(archive).ok()?).ok()?;
     Some(
         zip.file_names()
+            .filter_map(Result::ok)
             .filter(|n| !n.ends_with('/') && !n.starts_with("__MACOSX/"))
-            .filter(|n| crate::files::is_supported(Path::new(n)))
+            .filter(|n| crate::files::is_supported(Path::new(n.as_ref())))
             .map(String::from)
             .collect(),
     )
@@ -38,4 +39,24 @@ pub fn read(page: &Path) -> Option<Result<Vec<u8>, String>> {
         std::io::Read::read_to_end(&mut entry, &mut bytes).map_err(|e| e.to_string())?;
         Ok(bytes)
     })())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn comic_archive() {
+        let archive = std::fs::canonicalize("tests/data/comic.cbz").unwrap();
+        assert!(is_archive(&archive));
+        // images only: no folders, macOS resource files or text
+        let mut names = images(&archive).unwrap();
+        names.sort();
+        assert_eq!(names, ["pages/page10.jpg", "pages/page2.jpg"]);
+        let page = archive.join("pages/page2.jpg");
+        assert_eq!(archive_of(&page), Some(archive.clone()));
+        let bytes = read(&page).unwrap().unwrap();
+        assert_eq!(bytes, std::fs::read("tests/data/restart-444.jpg").unwrap());
+        assert!(read(&archive.join("pages/missing.jpg")).unwrap().is_err());
+    }
 }

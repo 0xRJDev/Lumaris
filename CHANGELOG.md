@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- Fixed: SVG text without an installed font (Times New Roman, or a generic family like serif) was
+  not drawn; it now uses the system's serif, sans-serif and monospace fonts
+- Updated wgpu 30, resvg 0.50, zip 9 and libheif-rs 3
+
 ## 0.2.0 (2026-11-23)
 
 ### New

@@ -406,20 +406,49 @@ fn animation<'a>(dec: impl AnimationDecoder<'a>) -> Result<Decoded, String> {
 }
 
 /// System fonts (for text in SVG files), loaded once on first use
+/// The system's font for a generic family ("serif", "sans-serif", "monospace"), from fontconfig
+fn system_family(generic: &str) -> Option<String> {
+    let out = std::process::Command::new("fc-match").args(["-f", "%{family[0]}", generic]).output().ok()?;
+    let name = String::from_utf8(out.stdout).ok()?.trim().to_string();
+    (out.status.success() && !name.is_empty()).then_some(name)
+}
+
+/// System fonts for SVG text. The generic families are the system's (fontdb assumes Windows
+/// fonts like Times New Roman, which Linux systems rarely have: such text was not drawn).
 pub fn fonts() -> Arc<resvg::usvg::fontdb::Database> {
     static FONTS: OnceLock<Arc<resvg::usvg::fontdb::Database>> = OnceLock::new();
     FONTS
         .get_or_init(|| {
             let mut db = resvg::usvg::fontdb::Database::new();
             db.load_system_fonts();
+            if let Some(f) = system_family("serif") {
+                db.set_serif_family(f);
+            }
+            if let Some(f) = system_family("sans-serif") {
+                db.set_sans_serif_family(f);
+            }
+            if let Some(f) = system_family("monospace") {
+                db.set_monospace_family(f);
+            }
             Arc::new(db)
         })
         .clone()
 }
 
+/// Font of SVG text without a font family: the serif font, as in browsers
+fn default_font_family() -> String {
+    static FAMILY: OnceLock<String> = OnceLock::new();
+    FAMILY.get_or_init(|| system_family("serif").unwrap_or_else(|| "Times New Roman".into())).clone()
+}
+
 fn decode_svg(path: &Path) -> Result<Decoded, String> {
     let data = std::fs::read(path).map_err(|e| e.to_string())?;
-    let opt = resvg::usvg::Options { resources_dir: path.parent().map(|p| p.to_path_buf()), fontdb: fonts(), ..Default::default() };
+    let opt = resvg::usvg::Options {
+        resources_dir: path.parent().map(|p| p.to_path_buf()),
+        fontdb: fonts(),
+        font_family: default_font_family(),
+        ..Default::default()
+    };
     let tree = Arc::new(resvg::usvg::Tree::from_data(&data, &opt).map_err(|e| e.to_string())?);
     let size = tree.size();
     let (w, h) = ((size.width().ceil() as u32).max(1), (size.height().ceil() as u32).max(1));
@@ -607,5 +636,43 @@ mod tests {
         fit_to_gpu(&mut small);
         assert_eq!((small.pixel_width, small.pixel_height), (80, 60));
         set_max_texture(0);
+    }
+}
+
+#[cfg(test)]
+mod format_tests {
+    #[test]
+    fn heic() {
+        let d = super::decode(std::path::Path::new("tests/data/small.heic")).unwrap();
+        assert_eq!((d.width, d.height), (240, 135));
+        assert_eq!(d.rgba.len(), 240 * 135 * 4);
+        // a real picture, not an empty buffer
+        assert!(d.rgba.chunks(4).any(|p| p[0] != p[1] || p[1] != p[2]));
+    }
+}
+
+#[cfg(test)]
+mod svg_tests {
+    #[test]
+    fn svg() {
+        let d = super::decode(std::path::Path::new("tests/data/shape.svg")).unwrap();
+        assert_eq!((d.width, d.height), (120, 80));
+        assert!(d.vector.is_some());
+        let px = |x: u32, y: u32| {
+            let i = ((y * d.pixel_width + x) * 4) as usize;
+            [d.rgba[i], d.rgba[i + 1], d.rgba[i + 2], d.rgba[i + 3]]
+        };
+        let (sx, sy) = (d.pixel_width as f64 / 120.0, d.pixel_height as f64 / 80.0);
+        let at = |x: f64, y: f64| px((x * sx) as u32, (y * sy) as u32);
+        assert_eq!(at(40.0, 30.0), [224, 80, 80, 255]); // red rectangle
+        assert_eq!(at(5.0, 5.0)[3], 0); // transparent background
+        let c = at(95.0, 55.0); // half transparent circle, straight alpha
+        assert!(c[3] > 100 && c[3] < 160 && c[2] > 200, "{c:?}");
+        // the text was drawn (with the system fonts; build machines may have none)
+        if super::fonts().is_empty() {
+            return;
+        }
+        let text = (0..60).flat_map(|x| (64..78).map(move |y| (x, y))).filter(|&(x, y)| at(x as f64, y as f64)[3] > 0).count();
+        assert!(text > 20, "text pixels: {text}");
     }
 }
